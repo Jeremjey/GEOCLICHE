@@ -1,0 +1,17 @@
+{
+  "name": "GéoCliché",
+  "short_name": "GéoCliché",
+  "description": "Photos de chantier nommées, annotées et positionnées en Lambert 93 ou CC49.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#24282C",
+  "theme_color": "#24282C",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
