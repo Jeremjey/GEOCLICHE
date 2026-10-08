@@ -1,6 +1,13 @@
 # GéoCliché
 
-Appareil photo de chantier pour iPhone (PWA) : chaque photo est nommée, annotée et positionnée en Lambert 93 ou CC49, puis exportée en CSV, ZIP, projet QGIS, KMZ, DXF, semis de points ou carte HTML avec rapport PDF.
+Appareil photo de chantier pour iPhone (PWA) : chaque photo est nommée, positionnée en Lambert 93 ou CC49, annotée ou chiffrée en métrés, puis exportée en Excel, CSV, ZIP, projet QGIS, KMZ, DXF, semis de points ou carte HTML avec rapport PDF.
+
+## Utilisation (version 1.1)
+- À l'ouverture : reprendre le dossier en cours, ou en créer un (nom du chantier, opérateur).
+- Après chaque photo : Photo seule, Annotation (main levée, trait, flèche, rectangle, cercle, zone, texte, cote) ou Métrés.
+- Métrés : choisir une fourniture déjà saisie dans le dossier ou en créer une (nom et unité), puis la quantité. Plusieurs lignes possibles par photo.
+- Zone : l'adresse GPS par défaut, modifiable à la prise de vue, dans la fiche photo ou dans le récap (Renommer).
+- Récap Métrés : totaux par fourniture et détail par zone, export Excel (3 feuilles) et rapport PDF.
 
 ## Mise en ligne
 La caméra et le GPS n'acceptent qu'une page servie en https.
@@ -18,9 +25,10 @@ Après toute modification, changer `VERSION` dans `sw.js`, sinon les téléphone
 - `index.html`, `css/app.css` : interface
 - `js/app.js` : écrans, GPS, prise de vue, galerie, carte, exports
 - `js/geo.js` : projections L93 / CC49, adresse (Géoplateforme IGN puis BAN), cap
-- `js/camera.js`, `js/photo.js`, `js/annot.js` : caméra, bandeau incrusté, annotation
+- `js/camera.js`, `js/photo.js`, `js/editor.js` : caméra, bandeau de coordonnées, annotation et métrés
 - `js/exif.js` : EXIF (GPS, date, cap, précision, commentaire)
-- `js/db.js` : stockage local (IndexedDB)
+- `js/db.js` : stockage local (IndexedDB) des photos et des dossiers
+- `js/xlsx.js` : classeur Excel des métrés
 - `js/zip.js`, `js/exports.js`, `js/qgis.js`, `js/report.js` : exports
 - `lib/` : Leaflet 1.9.4 et proj4 2.15 en copie locale (hors connexion)
 

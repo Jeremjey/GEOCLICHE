@@ -40,6 +40,8 @@
   }
   const fixed = (v, d) => (ok(v) ? Number(v).toFixed(d) : '');
   const dec = (v, d) => fixed(v, d).replace('.', ',');
+  const qf = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 3 });
+  const qty = (v) => (ok(v) ? qf.format(v).replace(/\u202f/g, '\u00a0') : '');
   const CARD = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
   const cardinal = (h) => CARD[Math.round((((h % 360) + 360) % 360) / 45) % 8];
   const pad2 = (n) => String(n).padStart(2, '0');
@@ -152,6 +154,6 @@
 
   global.Geo = {
     CRS, project, both, xy, other, fmt, fixed, dec, cardinal, pad2, stamp, dateFR, timeFR,
-    tzOffset, isoLocal, haversine, reverse, cameraHeading, Compass, ok
+    tzOffset, isoLocal, haversine, reverse, cameraHeading, Compass, ok, qty
   };
 })(typeof window !== 'undefined' ? window : globalThis);

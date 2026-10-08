@@ -1,12 +1,12 @@
 /* GéoCliché — service worker : l'appli s'ouvre et fonctionne hors connexion
    (seuls les fonds de carte et la recherche d'adresse demandent du réseau).
    Après toute mise à jour des fichiers, changer VERSION pour que les téléphones la récupèrent. */
-const VERSION = 'geocliche-1.0.0';
+const VERSION = 'geocliche-1.1.0';
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'lib/leaflet.css', 'lib/leaflet.js', 'lib/proj4.js',
   'lib/images/layers.png', 'lib/images/layers-2x.png', 'lib/images/marker-icon.png', 'lib/images/marker-icon-2x.png', 'lib/images/marker-shadow.png',
-  'js/geo.js', 'js/exif.js', 'js/zip.js', 'js/db.js', 'js/camera.js', 'js/photo.js', 'js/annot.js',
+  'js/geo.js', 'js/exif.js', 'js/zip.js', 'js/xlsx.js', 'js/db.js', 'js/camera.js', 'js/photo.js', 'js/editor.js',
   'js/qgis.js', 'js/report.js', 'js/exports.js', 'js/app.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-512-maskable.png', 'icons/apple-touch-icon.png'
 ];

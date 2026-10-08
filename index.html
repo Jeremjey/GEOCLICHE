@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#24282C">
-  <meta name="description" content="Appareil photo de chantier : chaque photo est nommée, annotée et positionnée en Lambert 93 ou CC49.">
+  <meta name="description" content="Appareil photo de chantier : photos annotées, métrés par fourniture, positions en Lambert 93 ou CC49.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -36,11 +36,44 @@
     <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
     <symbol id="i-select" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
     <symbol id="i-eraser" viewBox="0 0 24 24"><path d="M4 20h16"/><path d="M14.5 4.5l5 5L11 18H7l-3-3 10.5-10.5z"/></symbol>
+    <symbol id="i-line" viewBox="0 0 24 24"><path d="M5 19 19 5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 19 19 5M10 5h9v9"/></symbol>
+    <symbol id="i-rect" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></symbol>
+    <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+    <symbol id="i-poly" viewBox="0 0 24 24"><path d="M5 8l6-4 8 5-2 10-11-2z"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 7V5h14v2M12 5v14M9 19h6"/></symbol>
+    <symbol id="i-dim" viewBox="0 0 24 24"><path d="M5 17 17 5"/><path d="M3 15l4 4M15 3l4 4"/></symbol>
+    <symbol id="i-ruler" viewBox="0 0 24 24"><path d="M3 17 17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   </defs>
 </svg>
 
+<!-- ============ DOSSIER ============ -->
+<section id="scr-dossier" class="screen light on" aria-label="Dossier">
+  <div class="scroll dossier">
+    <div class="brand"><img src="icons/icon-192.png" alt=""><div><h1>GéoCliché</h1><p>Photos et métrés de chantier</p></div></div>
+    <div class="group resume" id="dosResumeBox" hidden>
+      <p class="lbl">Dossier en cours</p>
+      <p class="d-name" id="dosResName"></p>
+      <p class="d-meta" id="dosResMeta"></p>
+      <button type="button" class="btn big" id="dosResumeBtn">Reprendre ce dossier</button>
+    </div>
+    <h2>Nouveau dossier</h2>
+    <div class="group">
+      <label class="field">Nom du chantier<input id="dosChantier" type="text" autocomplete="off" placeholder="Ex. RD 36 Guyancourt"></label>
+      <label class="field">Opérateur<input id="dosOperateur" type="text" autocomplete="name" placeholder="Votre nom"></label>
+      <p class="err" id="dosErr" hidden></p>
+      <button type="button" class="btn big" id="dosCreate">Créer et commencer</button>
+    </div>
+    <h2 id="dosOthersT" hidden>Autres dossiers</h2>
+    <div class="group list" id="dosOthers" hidden></div>
+  </div>
+</section>
+
 <!-- ============ VISEUR ============ -->
-<section id="scr-cam" class="screen on" aria-label="Viseur">
+<section id="scr-cam" class="screen" aria-label="Viseur">
   <div id="vf" class="vf"><video id="video" playsinline muted autoplay></video></div>
 
   <header class="hud">
@@ -72,44 +105,51 @@
   </div>
 
   <div id="minimap" class="minimap" role="button" tabindex="0" aria-label="Ouvrir la carte des photos"></div>
-
   <div class="zoom-row" id="zoomRow" hidden></div>
 
   <footer class="cam-bar">
-    <button type="button" class="gal-btn" id="btnGallery" aria-label="Photos enregistrées">
+    <button type="button" class="bar-dos" id="hDossier" aria-label="Changer de dossier"><svg class="ic"><use href="#i-folder"/></svg><span id="hDossierName">Choisir un dossier</span></button>
+    <button type="button" class="gal-btn" id="btnGallery" aria-label="Photos du dossier">
       <img id="lastThumb" alt=""><span id="galCount" class="gal-count" hidden></span>
     </button>
     <button type="button" class="shutter" id="btnShutter" aria-label="Prendre la photo"><span></span></button>
-    <button type="button" class="annot-btn" id="btnAnnot" aria-pressed="false">
-      <svg class="ic"><use href="#i-pen"/></svg><span>Annoter</span>
-    </button>
+    <button type="button" class="annot-btn" id="btnRecap"><svg class="ic"><use href="#i-ruler"/></svg><span>Métrés</span></button>
   </footer>
   <input id="fileCam" type="file" accept="image/*" capture="environment" hidden>
   <div id="flash" class="flash"></div>
+
+  <div class="choice-wrap" id="choice" hidden>
+    <div class="choice" role="dialog" aria-modal="true" aria-label="Type de photo">
+      <canvas id="choiceCanvas"></canvas>
+      <button type="button" class="choice-btn" data-mode="photo"><svg class="ic"><use href="#i-camera"/></svg><b>Photo seule</b><span>Enregistrée telle quelle</span></button>
+      <button type="button" class="choice-btn" data-mode="annotation"><svg class="ic"><use href="#i-pen"/></svg><b>Annotation</b><span>Main levée, formes, texte, cotes</span></button>
+      <button type="button" class="choice-btn" data-mode="metres"><svg class="ic"><use href="#i-ruler"/></svg><b>Métrés</b><span>Quantités par fourniture, avec dessin</span></button>
+      <button type="button" class="txt-btn" id="choiceRetake">Reprendre la photo</button>
+    </div>
+  </div>
 </section>
 
-<!-- ============ ANNOTATION ============ -->
-<section id="scr-annot" class="screen dark" aria-label="Annotation">
+<!-- ============ ANNOTATION ET MÉTRÉS ============ -->
+<section id="scr-annot" class="screen dark" aria-label="Annotation et métrés">
   <header class="bar dark">
-    <button type="button" class="txt-btn" id="annCancel">Abandonner</button>
-    <h1>Annoter</h1>
-    <button type="button" class="btn small" id="annSave">Enregistrer</button>
+    <button type="button" class="txt-btn" id="edCancel">Abandonner</button>
+    <h1 id="edTitle">Annotation</h1>
+    <button type="button" class="btn small" id="edSave">Enregistrer</button>
   </header>
-  <div class="ann-stage" id="annStage"><canvas id="annCanvas"></canvas></div>
-  <div class="ann-tools">
-    <div class="ann-row">
-      <div class="colors" id="annColors" aria-label="Couleur du stylo"></div>
+  <div class="ann-stage" id="edStage"><canvas id="edCanvas"></canvas>
+    <button type="button" class="btn small poly-done" id="edPolyDone" hidden>Terminer la zone</button>
+  </div>
+  <div class="ed-tools">
+    <div class="tool-row" id="edTools"></div>
+    <div id="edColors"></div>
+  </div>
+  <div class="ed-panel">
+    <div id="edMetresBox" hidden>
+      <div class="ml-list" id="edMetres"></div>
+      <button type="button" class="btn small ghost-light" id="edAddMetre"><svg class="ic"><use href="#i-plus"/></svg>Ajouter un métré</button>
     </div>
-    <div class="ann-row">
-      <div class="widths" id="annWidths" aria-label="Épaisseur">
-        <button type="button" data-w="0" aria-label="Trait fin"><i style="--s:4px"></i></button>
-        <button type="button" data-w="1" class="on" aria-label="Trait moyen"><i style="--s:8px"></i></button>
-        <button type="button" data-w="2" aria-label="Trait épais"><i style="--s:13px"></i></button>
-      </div>
-      <button type="button" class="tool" id="annUndo"><svg class="ic"><use href="#i-undo"/></svg>Annuler le trait</button>
-      <button type="button" class="tool" id="annClear"><svg class="ic"><use href="#i-eraser"/></svg>Tout effacer</button>
-    </div>
-    <textarea id="annComment" rows="2" maxlength="600" placeholder="Commentaire, ajouté sous la photo"></textarea>
+    <label class="ed-field">Zone<input id="edZone" type="text" autocomplete="off" placeholder="Adresse ou nom de zone"></label>
+    <textarea id="edComment" rows="2" maxlength="600" placeholder="Commentaire, ajouté sous la photo"></textarea>
   </div>
 </section>
 
@@ -118,16 +158,17 @@
   <header class="bar">
     <button type="button" class="icon-btn" data-go="cam" aria-label="Retour au viseur"><svg class="ic"><use href="#i-back"/></svg></button>
     <h1 id="galTitle">Photos</h1>
+    <button type="button" class="icon-btn" id="galRecap" aria-label="Récapitulatif des métrés"><svg class="ic"><use href="#i-ruler"/></svg></button>
     <button type="button" class="icon-btn" id="galMap" aria-label="Carte des photos"><svg class="ic"><use href="#i-map"/></svg></button>
     <button type="button" class="icon-btn" id="galExport" aria-label="Exporter"><svg class="ic"><use href="#i-export"/></svg></button>
   </header>
   <div class="gal-tools">
-    <label class="select"><span class="sr">Chantier</span><select id="galFilter"></select></label>
+    <label class="select"><span class="sr">Dossier</span><select id="galFilter"></select></label>
     <button type="button" class="chip" id="galSelect"><svg class="ic"><use href="#i-select"/></svg><span>Sélectionner</span></button>
   </div>
   <div class="scroll"><div class="grid" id="galGrid"></div><div class="empty" id="galEmpty" hidden>
-    <p><strong>Aucune photo pour l’instant.</strong></p>
-    <p>Les photos prises avec le viseur s’affichent ici avec leur adresse et leur date.</p>
+    <p><strong>Aucune photo dans ce dossier.</strong></p>
+    <p>Les photos prises avec le viseur s’affichent ici avec leur zone, leur date et leurs métrés.</p>
     <button type="button" class="btn" data-go="cam">Ouvrir le viseur</button>
   </div></div>
   <div class="sel-bar" id="selBar" hidden>
@@ -141,7 +182,7 @@
 <!-- ============ FICHE PHOTO ============ -->
 <section id="scr-detail" class="screen light" aria-label="Fiche photo">
   <header class="bar">
-    <button type="button" class="icon-btn" data-go="gallery" aria-label="Retour aux photos"><svg class="ic"><use href="#i-back"/></svg></button>
+    <button type="button" class="icon-btn" id="detBack" aria-label="Retour"><svg class="ic"><use href="#i-back"/></svg></button>
     <h1 id="detTitle">Photo</h1>
     <button type="button" class="icon-btn" id="detShare" aria-label="Partager la photo"><svg class="ic"><use href="#i-share"/></svg></button>
     <button type="button" class="icon-btn" id="detDelete" aria-label="Supprimer la photo"><svg class="ic"><use href="#i-trash"/></svg></button>
@@ -159,11 +200,32 @@
 <!-- ============ CARTE ============ -->
 <section id="scr-map" class="screen" aria-label="Carte des photos">
   <div id="bigmap" class="bigmap"></div>
-  <button type="button" class="round map-back" data-go="gallery" aria-label="Retour"><svg class="ic"><use href="#i-back"/></svg></button>
+  <button type="button" class="round map-back" id="mapBack" aria-label="Retour"><svg class="ic"><use href="#i-back"/></svg></button>
   <div class="map-tools">
     <button type="button" class="round" id="mapMe" aria-label="Ma position"><svg class="ic"><use href="#i-target"/></svg></button>
     <button type="button" class="round" id="mapFit" aria-label="Voir toutes les photos"><svg class="ic"><use href="#i-fit"/></svg></button>
     <button type="button" class="round" id="mapShot" aria-label="Enregistrer la carte en image"><svg class="ic"><use href="#i-image"/></svg></button>
+  </div>
+</section>
+
+<!-- ============ RÉCAP DES MÉTRÉS ============ -->
+<section id="scr-recap" class="screen light" aria-label="Récapitulatif des métrés">
+  <header class="bar">
+    <button type="button" class="icon-btn" id="recapBack" aria-label="Retour"><svg class="ic"><use href="#i-back"/></svg></button>
+    <h1>Métrés</h1>
+    <span class="bar-spacer"></span>
+  </header>
+  <div class="gal-tools">
+    <label class="select"><span class="sr">Dossier</span><select id="recapDossier"></select></label>
+    <div class="seg compact" role="radiogroup" aria-label="Classement" id="recapTab">
+      <button type="button" role="radio" data-v="f">Fournitures</button>
+      <button type="button" role="radio" data-v="z">Zones</button>
+    </div>
+  </div>
+  <div class="scroll" id="recapBody"></div>
+  <div class="sel-bar recap-bar" id="recapBar" hidden>
+    <button type="button" class="btn ghost-dark" id="recapPdf"><svg class="ic"><use href="#i-export"/></svg>Rapport PDF</button>
+    <button type="button" class="btn" id="recapXlsx"><svg class="ic"><use href="#i-download"/></svg>Excel</button>
   </div>
 </section>
 
@@ -175,6 +237,13 @@
     <span class="bar-spacer"></span>
   </header>
   <div class="scroll settings">
+    <h2>Dossier en cours</h2>
+    <div class="group">
+      <p class="stat" id="setDossier">—</p>
+      <button type="button" class="row-btn" id="setDosEdit">Modifier le chantier ou l’opérateur<svg class="ic"><use href="#i-chev"/></svg></button>
+      <button type="button" class="row-btn" id="setDosChange">Changer de dossier<svg class="ic"><use href="#i-chev"/></svg></button>
+    </div>
+
     <h2>Coordonnées</h2>
     <div class="group">
       <div class="seg" role="radiogroup" aria-label="Système de coordonnées" id="setCrs">
@@ -182,13 +251,6 @@
         <button type="button" role="radio" data-v="CC49">CC49</button>
       </div>
       <p class="help">Affiché en grand dans le viseur, incrusté sur les photos et proposé par défaut dans les exports. L’autre système reste visible en petit.</p>
-    </div>
-
-    <h2>Chantier</h2>
-    <div class="group">
-      <label class="field">Nom du chantier<input id="setChantier" type="text" autocomplete="off" placeholder="Ex. RD 36 Guyancourt"></label>
-      <label class="field">Opérateur<input id="setOperateur" type="text" autocomplete="name" placeholder="Votre nom (facultatif)"></label>
-      <p class="help">Le chantier s’inscrit sur chaque photo et sert à trier les exports.</p>
     </div>
 
     <h2>Photos</h2>
@@ -205,10 +267,10 @@
       <p class="stat" id="setStorage">—</p>
       <button type="button" class="row-btn" id="setHelp">Autoriser la position sur iPhone<svg class="ic"><use href="#i-chev"/></svg></button>
       <button type="button" class="row-btn danger" id="setWipe">Supprimer toutes les photos<svg class="ic"><use href="#i-trash"/></svg></button>
-      <p class="help">Les photos restent dans le téléphone tant qu’elles ne sont pas exportées. Ajoutez l’appli à l’écran d’accueil pour éviter que Safari ne les efface, et exportez en fin de journée.</p>
+      <p class="help">Les photos restent dans le téléphone tant qu’elles ne sont pas exportées. Ajoutez l’appli à l’écran d’accueil pour éviter que Safari ne les efface, et exportez en fin de tournée.</p>
     </div>
 
-    <p class="about">GéoCliché 1.0. Coordonnées calculées depuis le GPS du téléphone (WGS 84 vers RGF93), précision de l’ordre du mètre. L’altitude GPS n’est pas rattachée au NGF.</p>
+    <p class="about">GéoCliché 1.1. Coordonnées calculées depuis le GPS du téléphone (WGS 84 vers RGF93), précision de l’ordre du mètre. L’altitude GPS n’est pas rattachée au NGF. Les quantités des métrés sont saisies, pas mesurées sur la photo.</p>
   </div>
 </section>
 
@@ -224,14 +286,15 @@
       <button type="button" role="radio" data-v="CC49">CC49</button>
     </div>
     <div class="exp-list" id="expList">
-      <button type="button" class="exp" data-k="html"><b>Carte HTML et rapport PDF</b><span>Un fichier à ouvrir dans un navigateur : carte, photos, impression A4 ou A3</span><em>.html</em></button>
-      <button type="button" class="exp" data-k="dxf"><b>DXF</b><span>Bloc PHOTO avec attributs, ligne de cap, nom du fichier. AutoCAD, Covadis</span><em>.dxf</em></button>
+      <button type="button" class="exp" data-k="xlsx"><b>Métrés Excel</b><span>Totaux par fourniture, détail par zone et par photo</span><em>.xlsx</em></button>
+      <button type="button" class="exp" data-k="html"><b>Carte HTML et rapport PDF</b><span>Carte, photos, récapitulatif des métrés, impression A4 ou A3</span><em>.html</em></button>
+      <button type="button" class="exp" data-k="dxf"><b>DXF</b><span>Bloc PHOTO avec attributs (zone, métrés), ligne de cap. AutoCAD, Covadis</span><em>.dxf</em></button>
       <button type="button" class="exp" data-k="kmz"><b>KMZ</b><span>Points et photos pour Google Earth</span><em>.kmz</em></button>
       <button type="button" class="exp" data-k="qgis"><b>Projet QGIS</b><span>GeoJSON, projet .qgs avec vignettes et fonds IGN, photos</span><em>.zip</em></button>
       <button type="button" class="exp" data-k="zipPhotos"><b>Photos et tableau</b><span>Toutes les photos avec le tableau CSV</span><em>.zip</em></button>
       <button type="button" class="exp" data-k="csv"><b>Tableau CSV</b><span>Une ligne par photo, lisible dans Excel</span><em>.csv</em></button>
       <button type="button" class="exp" data-k="txt"><b>Semis de points</b><span>N° X Y Z code, pour Covadis ou Mensura</span><em>.txt</em></button>
-      <button type="button" class="exp" data-k="all"><b>Tout en un</b><span>Photos, CSV, GeoJSON, QGIS, DXF, KML, points</span><em>.zip</em></button>
+      <button type="button" class="exp" data-k="all"><b>Tout en un</b><span>Photos, CSV, métrés Excel, GeoJSON, QGIS, DXF, KML, points</span><em>.zip</em></button>
     </div>
     <div class="exp-busy" id="expBusy" hidden>
       <div class="bar-track"><i id="expBar"></i></div>
@@ -250,7 +313,7 @@
 </div>
 
 <div class="modal-wrap" id="modal" hidden>
-  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <h2 id="modalTitle"></h2>
     <div id="modalBody"></div>
     <div class="modal-actions" id="modalActions"></div>
@@ -264,10 +327,11 @@
 <script src="js/geo.js"></script>
 <script src="js/exif.js"></script>
 <script src="js/zip.js"></script>
+<script src="js/xlsx.js"></script>
 <script src="js/db.js"></script>
 <script src="js/camera.js"></script>
 <script src="js/photo.js"></script>
-<script src="js/annot.js"></script>
+<script src="js/editor.js"></script>
 <script src="js/qgis.js"></script>
 <script src="js/report.js"></script>
 <script src="js/exports.js"></script>

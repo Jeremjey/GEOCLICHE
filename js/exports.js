@@ -1,16 +1,19 @@
-/* GéoCliché — exports : CSV, ZIP, QGIS, KMZ, DXF, points TXT, carte HTML */
+/* GéoCliché — exports : CSV, ZIP, QGIS, KMZ, DXF, points TXT, métrés Excel, carte HTML */
 (function (global) {
   'use strict';
   const G = global.Geo;
 
   const MIME = {
     csv: 'text/csv;charset=utf-8', zip: 'application/zip', kmz: 'application/vnd.google-earth.kmz',
-    dxf: 'application/dxf', txt: 'text/plain;charset=utf-8', html: 'text/html;charset=utf-8'
+    dxf: 'application/dxf', txt: 'text/plain;charset=utf-8', html: 'text/html;charset=utf-8',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   };
+  const TYPE = { photo: 'Photo seule', annotation: 'Annotation', metres: 'Métrés' };
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const slug = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
   const r = (v, d) => (G.ok(v) ? Math.round(v * 10 ** d) / 10 ** d : null);
+  const uniq = (a) => Array.from(new Set(a));
 
   /** Copie triée chronologiquement, numérotée 1..n, noms de fichiers garantis uniques. */
   function prepare(list) {
@@ -26,16 +29,51 @@
   const baseName = (ctx) => ['GeoCliche', slug(ctx.chantier), G.stamp(Date.now()).slice(0, 8)].filter(Boolean).join('_');
   const tick = (ctx, i, n, label) => { if (ctx.progress) ctx.progress(i, n, label); };
   const pause = () => new Promise((res) => setTimeout(res, 0));
+  const mtext = (p) => (p.metres || []).map((m) => `${m.name} ${G.qty(m.qty)} ${m.unit}`).join(' / ');
+  const zoneOf = (p) => String(p.zone || p.address || '').trim() || 'Sans zone';
+
+  /** Regroupe les métrés : par fourniture (totaux), par zone, et liste détaillée. P doit être numéroté (prepare). */
+  function metresSummary(P) {
+    const byF = new Map(), byZ = new Map(), rows = [];
+    P.forEach((p) => {
+      (p.metres || []).forEach((m) => {
+        if (!G.ok(m.qty)) return;
+        const key = m.fid || (m.name + '|' + m.unit), z = zoneOf(p), color = m.color || '#888888';
+        if (!byF.has(key)) byF.set(key, { key, name: m.name, unit: m.unit, color, total: 0, n: 0, entries: [] });
+        const f = byF.get(key);
+        f.total += m.qty; f.n += 1;
+        f.entries.push({ id: p.id, n: p.n, zone: z, qty: m.qty });
+        if (!byZ.has(z)) byZ.set(z, { zone: z, photos: [], items: new Map() });
+        const Z = byZ.get(z);
+        if (!Z.photos.some((x) => x.id === p.id)) Z.photos.push({ id: p.id, n: p.n });
+        if (!Z.items.has(key)) Z.items.set(key, { name: m.name, unit: m.unit, color, total: 0, photos: [] });
+        const it = Z.items.get(key);
+        it.total += m.qty;
+        if (!it.photos.includes(p.n)) it.photos.push(p.n);
+        rows.push({ p, m, zone: z });
+      });
+    });
+    const rd = (v) => Math.round(v * 1e6) / 1e6;
+    return {
+      byFourniture: Array.from(byF.values()).map((f) => Object.assign(f, { total: rd(f.total) }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'fr')),
+      byZone: Array.from(byZ.values()).map((Z) => ({
+        zone: Z.zone, photos: Z.photos,
+        items: Array.from(Z.items.values()).map((it) => Object.assign(it, { total: rd(it.total) }))
+      })),
+      rows
+    };
+  }
 
   // ---------------------------------------------------------------- CSV
   function csv(P) {
-    const H = ['N°', 'Fichier', 'Date', 'Heure', 'Chantier', 'X_L93', 'Y_L93', 'X_CC49', 'Y_CC49', 'Z_GPS_m',
+    const H = ['N°', 'Fichier', 'Date', 'Heure', 'Chantier', 'Type', 'Zone', 'Metres', 'X_L93', 'Y_L93', 'X_CC49', 'Y_CC49', 'Z_GPS_m',
       'Precision_m', 'Cap_deg', 'Latitude', 'Longitude', 'Adresse', 'Commentaire', 'Operateur', 'Lien_carte'];
     const q = (v) => { const s = String(v == null ? '' : v); return /[;"\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const rows = [H.join(';')];
     P.forEach((p) => {
       const has = G.ok(p.lat);
-      rows.push([p.n, p.name, G.dateFR(p.ts), G.timeFR(p.ts), p.chantier,
+      rows.push([p.n, p.name, G.dateFR(p.ts), G.timeFR(p.ts), p.chantier, TYPE[p.mode] || '', p.zone || '', mtext(p),
         G.dec(p.x93, 2), G.dec(p.y93, 2), G.dec(p.x49, 2), G.dec(p.y49, 2), G.dec(p.alt, 1), G.dec(p.acc, 1),
         G.ok(p.heading) ? Math.round(p.heading) : '', G.dec(p.lat, 7), G.dec(p.lon, 7), p.address, p.comment, p.operateur,
         has ? `https://www.google.com/maps?q=${p.lat.toFixed(7)},${p.lon.toFixed(7)}` : ''].map(q).join(';'));
@@ -55,7 +93,8 @@
           type: 'Feature',
           properties: {
             num: p.n, fichier: p.name, photo: (dir || 'photos/') + p.name, vignette: 'vignettes/' + p.name, date: G.isoLocal(p.ts),
-            chantier: p.chantier || '', x: r(x, 3), y: r(y, 3), z: r(p.alt, 2), precision: r(p.acc, 1),
+            chantier: p.chantier || '', type: TYPE[p.mode] || '', zone: p.zone || '', metres: mtext(p),
+            x: r(x, 3), y: r(y, 3), z: r(p.alt, 2), precision: r(p.acc, 1),
             cap: G.ok(p.heading) ? Math.round(p.heading) : null, lat: r(p.lat, 8), lon: r(p.lon, 8),
             adresse: p.address || '', commentaire: p.comment || '', operateur: p.operateur || ''
           },
@@ -75,11 +114,12 @@
         `${c.label} X ${G.fixed(x, 2)} Y ${G.fixed(y, 2)}`,
         [G.ok(p.alt) ? `Z GPS ${G.fixed(p.alt, 1)} m` : '', G.ok(p.acc) ? `précision ±${G.fixed(p.acc, 1)} m` : '',
           G.ok(p.heading) ? `cap ${Math.round(p.heading)}°` : ''].filter(Boolean).join(', '),
-        p.address || ''
+        p.zone ? `Zone : ${p.zone}` : (p.address || ''),
+        ...(p.metres || []).map((m) => `${m.name} : ${G.qty(m.qty)} ${m.unit}`)
       ].filter(Boolean).map(esc).join('<br/>');
       const desc = `<img src="${dir}${esc(p.name)}" width="480"/><br/><b>${esc(p.name)}</b><br/>${info}` +
         (p.comment ? `<br/><i>${esc(p.comment)}</i>` : '');
-      const data = { fichier: p.name, chantier: p.chantier, x: G.fixed(x, 2), y: G.fixed(y, 2), z: G.fixed(p.alt, 2), adresse: p.address, commentaire: p.comment };
+      const data = { fichier: p.name, chantier: p.chantier, zone: p.zone, metres: mtext(p), x: G.fixed(x, 2), y: G.fixed(y, 2), z: G.fixed(p.alt, 2), adresse: p.address, commentaire: p.comment };
       const ext = Object.keys(data).map((k) => `<Data name="${k}"><value>${esc(data[k])}</value></Data>`).join('');
       return `  <Placemark><name>${p.n}</name><description><![CDATA[${desc.replace(/]]>/g, ']]&gt;')}]]></description>` +
         `<TimeStamp><when>${new Date(p.ts).toISOString()}</when></TimeStamp><styleUrl>#photo</styleUrl>` +
@@ -100,7 +140,7 @@ ${marks.join('\n')}
   const CP1252 = { 0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87,
     0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C, 0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92,
     0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A,
-    0x203A: 0x9B, 0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F, 0x00A0: 0x20, 0x202F: 0x20 };
+    0x203A: 0x9B, 0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F, 0x00A0: 0x20, 0x202F: 0x20, 0x00B2: 0xB2, 0x00B3: 0xB3 };
   function cp1252(str) {
     const out = new Uint8Array(str.length);
     for (let i = 0; i < str.length; i++) {
@@ -109,7 +149,6 @@ ${marks.join('\n')}
     }
     return out;
   }
-
   function dxf(P, key) {
     const L = [];
     const g = (code, val) => { L.push(String(code).padStart(3, ' ')); L.push(String(val)); };
@@ -123,6 +162,8 @@ ${marks.join('\n')}
       ['NUM', 'Numero', 0, (p) => p.n],
       ['FICHIER', 'Fichier', 1, (p) => p.name],
       ['DATE', 'Date', 1, (p) => `${G.dateFR(p.ts)} ${G.timeFR(p.ts)}`],
+      ['ZONE', 'Zone', 1, (p) => p.zone || p.address],
+      ['METRES', 'Metres', 1, (p) => mtext(p)],
       ['Z', 'Altitude GPS', 1, (p) => G.fixed(p.alt, 2)],
       ['PRECISION', 'Precision (m)', 1, (p) => G.fixed(p.acc, 1)],
       ['CAP', 'Cap (deg)', 1, (p) => (G.ok(p.heading) ? Math.round(p.heading) : '')],
@@ -197,12 +238,40 @@ ${marks.join('\n')}
     }).join('\r\n') + '\r\n';
   }
 
-  // ---------------------------------------------------------------- Projet QGIS
-  function qgs(P, ctx) {
-    return global.QgisProject.build(P, ctx);
+  // ---------------------------------------------------------------- Métrés Excel
+  async function xlsxBlob(P, ctx) {
+    const S = metresSummary(P), c = G.CRS[ctx.crs] || G.CRS.L93;
+    const H = (t) => ({ v: t, s: 1 });
+    const n2 = (v) => ({ v: Math.round(v * 1e6) / 1e6, s: 2 });
+    const now = `${G.dateFR(Date.now())} ${G.timeFR(Date.now()).slice(0, 5)}`;
+    const sheets = [
+      {
+        name: 'Par fourniture', widths: [34, 8, 16, 10, 34],
+        rows: [[H('Fourniture'), H('Unité'), H('Quantité totale'), H('Relevés'), H('Photos n°')]]
+          .concat(S.byFourniture.map((f) => [f.name, f.unit, n2(f.total), f.n, uniq(f.entries.map((e) => e.n)).join(', ')]))
+          .concat([[], [{ v: 'Dossier', s: 4 }, ctx.chantier || ctx.title], [{ v: 'Opérateur', s: 4 }, ctx.operateur || ''], [{ v: 'Édité le', s: 4 }, now]])
+      },
+      {
+        name: 'Par zone', widths: [44, 34, 8, 14, 20],
+        rows: [[H('Zone'), H('Fourniture'), H('Unité'), H('Quantité'), H('Photos n°')]]
+          .concat(...S.byZone.map((z) => z.items.map((it) => [z.zone, it.name, it.unit, n2(it.total), it.photos.join(', ')])))
+      },
+      {
+        name: 'Détail', widths: [9, 34, 11, 9, 40, 40, 30, 8, 12, 15, 15, 40],
+        rows: [[H('N° photo'), H('Fichier'), H('Date'), H('Heure'), H('Zone'), H('Adresse'), H('Fourniture'), H('Unité'), H('Quantité'),
+          H('X ' + c.label), H('Y ' + c.label), H('Commentaire')]]
+          .concat(S.rows.map(({ p, m, zone }) => {
+            const xy = G.ok(p.lat) ? G.xy(p, ctx.crs) : null;
+            return [p.n, p.name, G.dateFR(p.ts), G.timeFR(p.ts), zone, p.address || '', m.name, m.unit, n2(m.qty),
+              xy ? n2(xy.x) : '', xy ? n2(xy.y) : '', p.comment || ''];
+          }))
+      }
+    ];
+    return { blob: await global.Xlsx.build(sheets), empty: !S.rows.length };
   }
 
   // ---------------------------------------------------------------- fichiers
+  function qgs(P, ctx) { return global.QgisProject.build(P, ctx); }
   async function addPhotos(z, P, ctx, dir, label) {
     for (let i = 0; i < P.length; i++) {
       tick(ctx, i, P.length, label || 'Ajout des photos');
@@ -210,7 +279,6 @@ ${marks.join('\n')}
     }
     tick(ctx, P.length, P.length, label || 'Ajout des photos');
   }
-
   /** Vignettes carrées pour l'affichage des photos dans QGIS (taille fixe, sans déborder du cadre). */
   async function addVignettes(z, P, ctx) {
     for (let i = 0; i < P.length; i++) {
@@ -223,6 +291,10 @@ ${marks.join('\n')}
   const kinds = {
     async csv(list, ctx) {
       return { blob: new Blob([csv(prepare(list))], { type: MIME.csv }), name: baseName(ctx) + '.csv' };
+    },
+    async xlsx(list, ctx) {
+      const x = await xlsxBlob(prepare(list), ctx);
+      return { blob: x.blob, name: baseName(ctx) + '_metres.xlsx', empty: x.empty };
     },
     async zipPhotos(list, ctx) {
       const P = prepare(list), z = new global.ZipWriter();
@@ -254,7 +326,7 @@ ${marks.join('\n')}
       return { blob: new Blob([txt(P, ctx.crs)], { type: MIME.txt }), name: `${baseName(ctx)}_points_${ctx.crs}.txt`, skipped: list.length - P.length };
     },
     async html(list, ctx) {
-      const P = located(prepare(list));
+      const Pall = prepare(list), P = located(Pall), sum = metresSummary(Pall);
       const [js, css] = await Promise.all([
         fetch('lib/leaflet.js').then((x) => x.text()),
         fetch('lib/leaflet.css').then((x) => x.text())
@@ -268,19 +340,26 @@ ${marks.join('\n')}
           xf: G.fmt(x, 2), yf: G.fmt(y, 2), z: G.ok(p.alt) ? G.fmt(p.alt, 1) : '',
           acc: G.ok(p.acc) ? G.fmt(p.acc, 1) : '', cap: G.ok(p.heading) ? Math.round(p.heading) : '',
           lat: p.lat, lon: p.lon, address: p.address || '', comment: p.comment || '', chantier: p.chantier || '',
+          zone: p.zone && p.zone !== p.address ? p.zone : '',
+          metres: (p.metres || []).map((m) => ({ name: m.name, unit: m.unit, color: m.color || '#888888', qty: G.qty(m.qty) })),
           img: await global.Photo.dataUrlFrom(p.blob, 1600, 0.8)
         });
         await pause();
       }
       const html = global.Report.build({
         title: ctx.title, chantier: ctx.chantier || '', crs: c.label, crsName: c.name,
-        generated: `${G.dateFR(Date.now())} ${G.timeFR(Date.now()).slice(0, 5)}`, photos
+        generated: `${G.dateFR(Date.now())} ${G.timeFR(Date.now()).slice(0, 5)}`, photos,
+        metres: {
+          byFourniture: sum.byFourniture.map((f) => ({ name: f.name, unit: f.unit, color: f.color, total: G.qty(f.total), n: f.n, photos: uniq(f.entries.map((e) => e.n)).join(', ') })),
+          byZone: sum.byZone.map((z) => ({ zone: z.zone, photos: z.photos.map((x) => x.n).join(', '), items: z.items.map((it) => ({ name: it.name, unit: it.unit, color: it.color, total: G.qty(it.total) })) }))
+        }
       }, { js, css });
       return { blob: new Blob([html], { type: MIME.html }), name: baseName(ctx) + '_carte.html', skipped: list.length - P.length };
     },
     async all(list, ctx) {
       const P = prepare(list), Lc = located(P), z = new global.ZipWriter();
       await z.add('photos.csv', csv(P));
+      if (metresSummary(P).rows.length) await z.add('metres.xlsx', (await xlsxBlob(P, ctx)).blob);
       await z.add('photos.geojson', geojson(Lc, ctx.crs, 'photos/'));
       await z.add(baseName(ctx) + '.qgs', qgs(Lc, ctx));
       await z.add(`photos_${ctx.crs}.dxf`, dxf(Lc, ctx.crs));
@@ -292,5 +371,5 @@ ${marks.join('\n')}
     }
   };
 
-  global.Exports = { kinds, csv, geojson, kml, dxf, txt, prepare, located, esc, slug, MIME };
+  global.Exports = { kinds, csv, geojson, kml, dxf, txt, prepare, located, esc, slug, MIME, metresSummary, mtext };
 })(typeof window !== 'undefined' ? window : globalThis);

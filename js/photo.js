@@ -1,4 +1,4 @@
-/* GéoCliché — fabrication de la photo finale : bandeau de coordonnées, commentaire, EXIF, vignette */
+/* GéoCliché — photo finale : bandeau de coordonnées incrusté, bande zone / métrés / commentaire, EXIF, vignette */
 (function (global) {
   'use strict';
   const G = global.Geo;
@@ -32,49 +32,68 @@
   }
   function release(c) { if (c) { c.width = 0; c.height = 0; } }
 
-  /** Dessine la photo + bandeau incrusté en bas + bande blanche de commentaire sous l'image. */
-  function compose(src, lines, comment) {
-    const W = src.width, H = src.height;
+  /** Mise en page : photo, puis bandeau de coordonnées sous l'image (rien n'est masqué), puis bande blanche (zone, métrés, commentaire). */
+  function layout(W, H, lines, band) {
     const fs = Math.max(13, Math.round(Math.min(W, H) * 0.028));
     const lh = Math.round(fs * 1.34), pad = Math.round(fs * 0.75), bar = Math.max(3, Math.round(fs * 0.24));
     const textX = bar + pad, maxW = W - textX - pad;
-
-    const cfs = Math.round(fs * 1.06), clh = Math.round(cfs * 1.32);
-    let cLines = [];
-    if (comment && comment.trim()) {
-      const m = document.createElement('canvas').getContext('2d');
-      m.font = `500 ${cfs}px ${FONT}`;
-      cLines = wrap(m, comment.trim(), maxW).slice(0, 14);
-    }
-    const cH = cLines.length ? pad * 2 + cLines.length * clh : 0;
-
-    const out = document.createElement('canvas');
-    out.width = W; out.height = H + cH;
-    const ctx = out.getContext('2d');
-    ctx.drawImage(src, 0, 0);
-
+    const cfs = Math.round(fs * 1.06), clh = Math.round(cfs * 1.34), sw = Math.round(cfs * 0.78);
     const heights = lines.map((l) => Math.round(lh * (l.k || 1)));
-    const bh = pad * 2 + heights.reduce((s, h) => s + h, 0);
-    ctx.fillStyle = 'rgba(20, 22, 25, 0.64)';
-    ctx.fillRect(0, H - bh, W, bh);
+    const bh = pad * 2 + heights.reduce((a, h) => a + h, 0);
+    const m = document.createElement('canvas').getContext('2d');
+    const items = [];
+    if (band.zone) items.push({ t: 'Zone : ' + band.zone, w: 700 });
+    (band.metres || []).forEach((x) => items.push({ t: `${x.name} : ${G.qty(x.qty)} ${x.unit}`, w: 700, c: x.color }));
+    if (band.comment) {
+      m.font = `500 ${cfs}px ${FONT}`;
+      wrap(m, band.comment, maxW).slice(0, 12).forEach((t) => items.push({ t, w: 500 }));
+    }
+    const cH = items.length ? pad * 2 + items.length * clh : 0;
+    return { W, H, fs, pad, bar, textX, maxW, cfs, clh, sw, heights, bh, items, cH, total: H + bh + cH };
+  }
+  function compose(src, lines, band) {
+    let L = layout(src.width, src.height, lines, band);
+    const LIMIT = 15.5e6;                       // marge sous la limite des canvas d'iOS
+    if (L.W * L.total > LIMIT) {
+      const k = Math.sqrt(LIMIT / (L.W * L.total));
+      L = layout(Math.round(src.width * k), Math.round(src.height * k), lines, band);
+    }
+    const out = document.createElement('canvas');
+    out.width = L.W; out.height = L.total;
+    const ctx = out.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, L.W, L.H);
+
+    ctx.fillStyle = '#1E2226';
+    ctx.fillRect(0, L.H, L.W, L.bh);
     ctx.fillStyle = YELLOW;
-    ctx.fillRect(0, H - bh, bar, bh);
+    ctx.fillRect(0, L.H, L.bar, L.bh);
     ctx.textBaseline = 'middle';
-    let y = H - bh + pad;
+    let y = L.H + L.pad;
     lines.forEach((l, i) => {
-      const s = Math.round(fs * (l.k || 1));
+      const s = Math.round(L.fs * (l.k || 1));
       ctx.font = `${l.w || 500} ${s}px ${FONT}`;
       ctx.fillStyle = l.c || '#FFFFFF';
-      ctx.fillText(fitText(ctx, l.t, maxW), textX, y + heights[i] / 2);
-      y += heights[i];
+      ctx.fillText(fitText(ctx, l.t, L.maxW), L.textX, y + L.heights[i] / 2);
+      y += L.heights[i];
     });
 
-    if (cH) {
-      ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, H, W, cH);
-      ctx.fillStyle = YELLOW; ctx.fillRect(0, H, bar, cH);
-      ctx.fillStyle = '#16181B';
-      ctx.font = `500 ${cfs}px ${FONT}`;
-      cLines.forEach((t, i) => ctx.fillText(t, textX, H + pad + i * clh + clh / 2));
+    if (L.cH) {
+      const top = L.H + L.bh;
+      ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, top, L.W, L.cH);
+      ctx.fillStyle = YELLOW; ctx.fillRect(0, top, L.bar, L.cH);
+      L.items.forEach((it, i) => {
+        const yy = top + L.pad + i * L.clh + L.clh / 2;
+        let x = L.textX;
+        if (it.c) {
+          ctx.fillStyle = it.c;
+          ctx.fillRect(x, yy - L.sw / 2, L.sw, L.sw);
+          x += L.sw + Math.round(L.cfs * 0.45);
+        }
+        ctx.font = `${it.w} ${L.cfs}px ${FONT}`;
+        ctx.fillStyle = '#16181B';
+        ctx.fillText(fitText(ctx, it.t, L.W - x - L.pad), x, yy);
+      });
     }
     return out;
   }
@@ -98,11 +117,14 @@
     return xy ? `${G.stamp(ts)}_X${Math.round(xy.x)}_Y${Math.round(xy.y)}.jpg` : `${G.stamp(ts)}_sans_GPS.jpg`;
   }
 
-  /** snap = { ts, pos, heading, address, chantier, operateur, crs } */
-  async function build(src, snap, comment, quality) {
+  /** snap = { ts, pos, heading, address, chantier, operateur, crs } ; extra = { comment, zone, metres } */
+  async function build(src, snap, extra, quality) {
+    extra = extra || {};
     const p = snap.pos, key = snap.crs, crs = G.CRS[key];
     const xy = p ? G.xy(p, key) : null;
     const h = G.ok(snap.heading) ? snap.heading : null;
+    const comment = String(extra.comment || '').trim(), metres = extra.metres || [];
+    const zone = String(extra.zone || '').trim() || snap.address || '';
     const accTxt = p && G.ok(p.acc) ? (p.acc < 10 ? G.fmt(p.acc, 1) : String(Math.round(p.acc))) : null;
 
     const lines = [];
@@ -117,17 +139,18 @@
     if (snap.address) lines.push({ t: snap.address });
     if (snap.operateur) lines.push({ t: `Opérateur : ${snap.operateur}`, k: 0.92, c: 'rgba(255,255,255,0.85)' });
 
-    const out = compose(src, lines, comment);
+    const out = compose(src, lines, { zone: zone && zone !== snap.address ? zone : '', metres, comment });
     const name = fileName(snap.ts, xy);
-    const desc = xy ? `${crs.label} X=${G.fixed(xy.x, 2)} Y=${G.fixed(xy.y, 2)}${snap.address ? ' - ' + snap.address : ''}` : 'Sans position GPS';
+    const mtxt = metres.map((x) => `${x.name} ${G.qty(x.qty)} ${x.unit}`).join('; ');
+    const desc = xy ? `${crs.label} X=${G.fixed(xy.x, 2)} Y=${G.fixed(xy.y, 2)}${zone ? ' - ' + zone : ''}` : 'Sans position GPS';
     const app1 = global.Exif.build({
       ts: snap.ts, offset: G.tzOffset(snap.ts),
       lat: p ? p.lat : null, lon: p ? p.lon : null, alt: p ? p.alt : null, acc: p ? p.acc : null, heading: h,
       width: out.width, height: out.height,
       description: desc,
-      userComment: [comment, desc].filter(Boolean).join(' | '),
-      xpComment: [comment, snap.address].filter(Boolean).join(' | '),
-      xpSubject: snap.chantier, xpTitle: name, artist: snap.operateur, software: 'GeoCliche 1.0'
+      userComment: [mtxt, comment, desc].filter(Boolean).join(' | '),
+      xpComment: [zone, mtxt, comment].filter(Boolean).join(' | '),
+      xpSubject: snap.chantier, xpTitle: name, artist: snap.operateur, software: 'GeoCliche 1.1'
     });
     const jpg = await toBlob(out, 'image/jpeg', quality || 0.9);
     const bytes = global.Exif.insert(new Uint8Array(await jpg.arrayBuffer()), app1);
@@ -139,7 +162,7 @@
       alt: p && G.ok(p.alt) ? p.alt : null, acc: p && G.ok(p.acc) ? p.acc : null,
       altAcc: p && G.ok(p.altAcc) ? p.altAcc : null, heading: h,
       x93: p ? p.x93 : null, y93: p ? p.y93 : null, x49: p ? p.x49 : null, y49: p ? p.y49 : null,
-      address: snap.address || '', comment: (comment || '').trim(),
+      address: snap.address || '', zone, comment, metres,
       chantier: snap.chantier || '', operateur: snap.operateur || '', crs: key,
       width: out.width, height: out.height, size: blob.size, blob, thumb
     };
@@ -147,16 +170,19 @@
     return rec;
   }
 
-  /** Charge un Blob image et renvoie une version réduite (dataURL) — pour la carte HTML. */
-  async function dataUrlFrom(blob, max, q) {
+  function loadImage(blob) {
     const url = URL.createObjectURL(blob);
+    return new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res({ img: i, url });
+      i.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Image illisible')); };
+      i.src = url;
+    });
+  }
+  /** Version réduite en dataURL (carte HTML). */
+  async function dataUrlFrom(blob, max, q) {
+    const { img, url } = await loadImage(blob);
     try {
-      const img = await new Promise((res, rej) => {
-        const i = new Image();
-        i.onload = () => res(i);
-        i.onerror = () => rej(new Error('Image illisible'));
-        i.src = url;
-      });
       const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
       const c = document.createElement('canvas');
       c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
@@ -166,21 +192,12 @@
       const d = c.toDataURL('image/jpeg', q || 0.8);
       release(c);
       return d;
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    } finally { URL.revokeObjectURL(url); }
   }
-
   /** Recadrage carré centré (vignettes du projet QGIS). */
   async function squareFrom(blob, size) {
-    const url = URL.createObjectURL(blob);
+    const { img, url } = await loadImage(blob);
     try {
-      const img = await new Promise((res, rej) => {
-        const i = new Image();
-        i.onload = () => res(i);
-        i.onerror = () => rej(new Error('Image illisible'));
-        i.src = url;
-      });
       const w = img.naturalWidth, h = img.naturalHeight, s = Math.min(w, h);
       const c = document.createElement('canvas');
       c.width = c.height = size;
@@ -190,9 +207,7 @@
       const b = await toBlob(c, 'image/jpeg', 0.82);
       release(c);
       return b;
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    } finally { URL.revokeObjectURL(url); }
   }
 
   global.Photo = { build, compose, dataUrlFrom, squareFrom, release, fileName, toBlob };

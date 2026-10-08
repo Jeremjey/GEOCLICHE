@@ -1,21 +1,25 @@
-/* GéoCliché — interface : viseur, GPS, prise de vue, photos, fiche, carte, réglages, exports */
+/* GéoCliché — interface : dossiers, viseur, prise de vue, annotation et métrés, photos, récap, carte, réglages, exports */
 (function () {
   'use strict';
   const $ = (s, r) => (r || document).querySelector(s);
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const G = window.Geo, Camera = window.Camera, DB = window.DB, Photo = window.Photo, Exports = window.Exports;
   const esc = Exports.esc;
+  const uid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+  const TYPE = { photo: 'Photo seule', annotation: 'Annotation', metres: 'Métrés' };
+  const plural = (n, w) => `${n} ${w}${n > 1 ? 's' : ''}`;
 
   // ------------------------------------------------------------------ réglages
   const KEY = 'geocliche.settings';
-  const S = Object.assign({ crs: 'L93', chantier: '', operateur: '', annotate: false, quality: 0.85, lens: null }, readSettings());
+  const S = Object.assign({ crs: 'L93', operateur: '', quality: 0.85, lens: null, dossierId: null }, readSettings());
   function readSettings() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* stockage indisponible */ } }
 
   // ------------------------------------------------------------------ état
   const live = { pos: null, err: null, addr: { label: '', lat: null, lon: null, t: 0 }, addrBusy: false, watch: null };
-  let screen = 'cam', mapReturn = 'gallery';
-  let photos = [];                       // fiches sans le JPEG complet (relu dans la base au besoin)
+  let screen = 'dossier', mapReturn = 'gallery', recapReturn = 'cam', detailReturn = 'gallery';
+  let recapDossier = null, recapTab = 'f';
+  let photos = [], dossiers = [];
   const thumbUrls = new Map();
   let filter = '__all', selecting = false;
   const sel = new Set();
@@ -28,8 +32,8 @@
     { name: 'OpenTopoMap', url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', o: { subdomains: 'abc', maxNativeZoom: 17, maxZoom: 21, attribution: '© OpenStreetMap, SRTM, © OpenTopoMap' } }
   ];
 
-  // ------------------------------------------------------------------ utilitaires
-  let toastT = 0;
+  // ------------------------------------------------------------------ messages et fenêtres
+  let toastT = 0, modalClose = null;
   function toast(msg, ms) {
     const t = $('#toast');
     t.textContent = msg;
@@ -37,33 +41,55 @@
     clearTimeout(toastT);
     toastT = setTimeout(() => t.classList.remove('on'), ms || 2400);
   }
-  function modal(title, html, actions) {
+  /** Fenêtre générique. o = { title, html, ok, cancel (texte ou false), danger, onOpen(body), validate(body) → valeur ou false } */
+  function form(o) {
     return new Promise((res) => {
-      $('#modalTitle').textContent = title;
-      $('#modalBody').innerHTML = html;
-      const box = $('#modalActions');
+      $('#modalTitle').textContent = o.title;
+      const body = $('#modalBody'), box = $('#modalActions');
+      body.innerHTML = o.html || '';
       box.innerHTML = '';
-      actions.forEach((a) => {
+      const close = (v) => { $('#modal').hidden = true; modalClose = null; body.onkeydown = null; body.innerHTML = ''; res(v); };
+      const mk = (label, cls, fn) => {
         const b = document.createElement('button');
-        b.type = 'button'; b.className = 'btn ' + (a.cls || ''); b.textContent = a.label;
-        b.onclick = () => { $('#modal').hidden = true; res(a.v); };
+        b.type = 'button'; b.className = 'btn ' + cls; b.textContent = label; b.onclick = fn;
         box.appendChild(b);
+        return b;
+      };
+      if (o.cancel !== false) mk(o.cancel || 'Annuler', 'ghost-dark', () => close(null));
+      const okBtn = mk(o.ok || 'Valider', o.danger ? 'danger' : '', () => {
+        const v = o.validate ? o.validate(body) : true;
+        if (v === false || v == null) return;
+        close(v);
       });
+      modalClose = () => close(null);
+      body.onkeydown = (e) => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); okBtn.click(); } };
       $('#modal').hidden = false;
-      if (box.lastElementChild) box.lastElementChild.focus();
+      if (o.onOpen) o.onOpen(body);
+      const first = Array.from(body.querySelectorAll('input, textarea')).find((i) => i.offsetParent !== null);
+      setTimeout(() => (first || okBtn).focus(), 60);
     });
   }
-  const confirmBox = (title, text, ok, danger) =>
-    modal(title, `<p>${esc(text)}</p>`, [{ label: 'Annuler', v: false, cls: 'ghost-dark' }, { label: ok, v: true, cls: danger ? 'danger' : '' }]);
-  function locHelp() {
-    return modal('Autoriser la position',
-      '<p>Sur iPhone, Safari doit avoir accès à la position exacte :</p><ol>' +
-      '<li>Réglages, Confidentialité et sécurité, Service de localisation : activé.</li>' +
-      '<li>Dans la même page, Sites web Safari : « Lorsque l’app est active ».</li>' +
-      '<li>Activez « Position exacte ».</li></ol>' +
-      '<p>Revenez ensuite dans l’appli et rechargez-la. Si elle est installée sur l’écran d’accueil, fermez-la puis rouvrez-la.</p>',
-      [{ label: 'Compris', v: true }]);
+  const confirmBox = (title, text, ok, danger) => form({ title, html: `<p>${esc(text)}</p>`, ok, danger }).then((v) => !!v);
+  function prompt(title, value, opts) {
+    opts = opts || {};
+    return form({
+      title, ok: opts.ok || 'Valider',
+      html: `<input class="prompt-in" type="text" autocomplete="off" value="${esc(value || '')}" placeholder="${esc(opts.placeholder || '')}">`,
+      validate: (b) => b.querySelector('input').value
+    });
   }
+  function locHelp() {
+    return form({
+      title: 'Autoriser la position', ok: 'Compris', cancel: false,
+      html: '<p>Sur iPhone, Safari doit avoir accès à la position exacte :</p><ol>' +
+        '<li>Réglages, Confidentialité et sécurité, Service de localisation : activé.</li>' +
+        '<li>Dans la même page, Sites web Safari : « Lorsque l’app est active ».</li>' +
+        '<li>Activez « Position exacte ».</li></ol>' +
+        '<p>Revenez ensuite dans l’appli et rechargez-la. Si elle est installée sur l’écran d’accueil, fermez-la puis rouvrez-la.</p>'
+    });
+  }
+  window.UI = { form, prompt, confirm: confirmBox, toast, esc };
+
   function fmtSize(b) {
     if (!b) return '0 Ko';
     if (b < 1048576) return Math.max(1, Math.round(b / 1024)) + ' Ko';
@@ -89,7 +115,72 @@
       catch (e) { if (e.name !== 'AbortError') { toast('Partage impossible ici, le fichier est enregistré à la place.'); download(blob, name); } }
     } else download(blob, name);
   }
-  function setSeg(sel, v) { $$(sel + ' button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === String(v)))); }
+  function setSeg(s, v) { $$(s + ' button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === String(v)))); }
+
+  // ------------------------------------------------------------------ dossiers
+  const cur = () => dossiers.find((d) => d.id === S.dossierId) || null;
+  const dossierOf = (id) => dossiers.find((d) => d.id === id) || null;
+  function newDossier(chantier, operateur) {
+    const t = Date.now();
+    return { id: uid(), chantier, operateur, created: t, updated: t, fournitures: [] };
+  }
+  async function saveDossier(d) { d.updated = Date.now(); await DB.putDossier(d); }
+  function stats(d) {
+    const P = photos.filter((p) => p.dossierId === d.id);
+    return {
+      n: P.length,
+      m: P.reduce((s, p) => s + (p.metres ? p.metres.length : 0), 0),
+      last: P.reduce((a, p) => Math.max(a, p.ts), d.updated || d.created || 0)
+    };
+  }
+  const byActivity = () => dossiers.slice().sort((a, b) => stats(b).last - stats(a).last);
+  function renderDossierScreen() {
+    const d = cur();
+    $('#dosResumeBox').hidden = !d;
+    $('#dosCreate').classList.toggle('ghost-dark', !!d);
+    if (d) {
+      const s = stats(d);
+      $('#dosResName').textContent = d.chantier;
+      $('#dosResMeta').textContent = [d.operateur, plural(s.n, 'photo'), s.m ? plural(s.m, 'métré') : '',
+        'dernière activité le ' + G.dateFR(s.last)].filter(Boolean).join(', ');
+    }
+    $('#dosChantier').value = '';
+    $('#dosOperateur').value = (d && d.operateur) || S.operateur || '';
+    $('#dosErr').hidden = true;
+    const others = byActivity().filter((x) => !d || x.id !== d.id);
+    $('#dosOthersT').hidden = !others.length;
+    $('#dosOthers').hidden = !others.length;
+    $('#dosOthers').innerHTML = others.map((x) => {
+      const s = stats(x);
+      return `<button type="button" class="row-btn dos-row" data-id="${x.id}"><span><b>${esc(x.chantier)}</b>` +
+        `<small>${esc([x.operateur, plural(s.n, 'photo'), G.dateFR(s.last)].filter(Boolean).join(', '))}</small></span>` +
+        '<svg class="ic"><use href="#i-chev"/></svg></button>';
+    }).join('');
+  }
+  function renderDossierChip() { const d = cur(); $('#hDossierName').textContent = d ? d.chantier : 'Choisir un dossier'; }
+  function askCompass() { if (G.Compass.needsPermission && !G.Compass.started) G.Compass.request().then((ok) => { if (ok) startCompass(); }); }
+  function useDossier(d) {
+    S.dossierId = d.id;
+    if (d.operateur) S.operateur = d.operateur;
+    save();
+    filter = d.id; selecting = false; sel.clear();
+    renderDossierChip();
+    updateCounts();
+    go('cam');
+  }
+  async function createDossier() {
+    const ch = $('#dosChantier').value.trim(), op = $('#dosOperateur').value.trim();
+    if (!ch) {
+      const e = $('#dosErr');
+      e.textContent = 'Indiquez le nom du chantier.'; e.hidden = false;
+      $('#dosChantier').focus();
+      return;
+    }
+    const d = newDossier(ch, op);
+    dossiers.push(d);
+    await saveDossier(d);
+    useDossier(d);
+  }
 
   // ------------------------------------------------------------------ navigation
   function go(name) {
@@ -99,13 +190,22 @@
     screen = name;
     if (name !== 'detail') releaseDetail();
     if (name === 'annot') $('#toast').classList.remove('on');
-    if (name === 'cam') { startCamera(); Mini.refresh(); renderHud(); }
-    else if (prev === 'cam') stopCameraSoon();
+    if (name === 'cam') {
+      if (!cur()) { go('dossier'); return; }
+      startCamera(); Mini.refresh(); renderHud();
+    } else if (prev === 'cam') stopCameraSoon();
+    if (name === 'dossier') renderDossierScreen();
     if (name === 'gallery') renderGallery();
     if (name === 'settings') renderSettings();
+    if (name === 'recap') renderRecap();
     if (name === 'map') BigMap.open();
   }
   function openMap(from, focusId) { mapReturn = from; BigMap.focusId = focusId || null; go('map'); }
+  function openRecap(from) {
+    recapReturn = from;
+    recapDossier = from === 'gallery' && filter !== '__all' ? filter : S.dossierId;
+    go('recap');
+  }
 
   // ------------------------------------------------------------------ GPS et adresse
   function startGeo() {
@@ -146,11 +246,9 @@
     const a = live.addr;
     return a.label && a.lat != null && p && G.haversine(a.lat, a.lon, p.lat, p.lon) < 40 ? a.label : '';
   }
-
   function renderHud() {
-    const p = live.pos, main = S.crs, oth = G.other(main);
+    const p = live.pos, main = S.crs, oth = G.other(main), acc = $('#hAcc');
     $('#hCrs').textContent = G.CRS[main].label;
-    const acc = $('#hAcc');
     if (p) {
       const a = G.xy(p, main), b = G.xy(p, oth);
       $('#hX').textContent = G.fmt(a.x, 2);
@@ -165,7 +263,6 @@
       acc.textContent = '± — m'; acc.dataset.q = 'none';
     }
     $('#hAddr').textContent = addrFor(p) || (!p ? 'En attente du GPS…' : navigator.onLine ? 'Recherche de l’adresse…' : 'Adresse indisponible hors connexion');
-
     const b = $('#gpsBanner');
     b.dataset.k = '';
     if (live.err && live.err.code === 1) {
@@ -243,8 +340,7 @@
     } catch (e) { wake = null; }
   }
   function layoutCam() {
-    const vf = $('#vf'), v = $('#video');
-    const W = window.innerWidth;
+    const vf = $('#vf'), v = $('#video'), W = window.innerWidth;
     const ar = (v.videoWidth || 3) / (v.videoHeight || 4);
     const top0 = $('.hud').getBoundingClientRect().bottom + 6;
     const bot0 = $('.cam-bar').getBoundingClientRect().top - 4;
@@ -256,11 +352,8 @@
     vf.style.left = (W - w) / 2 + 'px'; vf.style.top = top + 'px';
     placeBanner();
   }
-
-  // objectifs et zoom
   function renderZoom() {
-    const row = $('#zoomRow'), lenses = Camera.lenses, z = Camera.effZoom;
-    const base = Camera.hw ? Camera.hw.min : 1;
+    const row = $('#zoomRow'), lenses = Camera.lenses, z = Camera.effZoom, base = Camera.hw ? Camera.hw.min : 1;
     const zTxt = String(Math.round(z * 10) / 10).replace('.', ',') + '×';
     row.innerHTML = '';
     const add = (label, on, aria, fn) => {
@@ -318,12 +411,12 @@
   }
 
   // ------------------------------------------------------------------ prise de vue
-  let shooting = false;
+  let shooting = false, choiceResolve = null;
   function snapshot() {
-    const p = live.pos ? Object.assign({}, live.pos) : null;
+    const p = live.pos ? Object.assign({}, live.pos) : null, d = cur();
     return {
-      ts: Date.now(), pos: p, heading: G.ok(G.Compass.heading) ? G.Compass.heading : null,
-      address: addrFor(p), chantier: S.chantier.trim(), operateur: S.operateur.trim(), crs: S.crs
+      ts: Date.now(), pos: p, heading: G.ok(G.Compass.heading) ? G.Compass.heading : null, address: addrFor(p),
+      chantier: d ? d.chantier : '', operateur: d ? (d.operateur || '') : '', crs: S.crs
     };
   }
   function flashFx() {
@@ -332,26 +425,22 @@
     requestAnimationFrame(() => requestAnimationFrame(() => f.classList.remove('on')));
     if (navigator.vibrate) navigator.vibrate(15);
   }
-  async function shoot() {
-    if (shooting) return;
-    if (!Camera.active) {
-      if (camStarting) { toast('La caméra démarre…'); return; }
-      $('#fileCam').click();
-      return;
-    }
-    shooting = true;
-    $('#btnShutter').classList.add('busy');
-    flashFx();
-    try {
-      const snap = snapshot();
-      await processCapture(Camera.grab(), snap);
-    } catch (e) {
-      console.error(e);
-      toast('La photo n’a pas été enregistrée : ' + ((e && e.message) || e), 5000);
-    } finally {
-      shooting = false;
-      $('#btnShutter').classList.remove('busy');
-    }
+  /** Fenêtre « Photo seule / Annotation / Métrés » avec l'aperçu. Résout le mode, ou null pour reprendre. */
+  function chooseMode(canvas) {
+    const pv = $('#choiceCanvas'), k = Math.min(1, 900 / Math.max(canvas.width, canvas.height));
+    pv.width = Math.round(canvas.width * k);
+    pv.height = Math.round(canvas.height * k);
+    pv.getContext('2d').drawImage(canvas, 0, 0, pv.width, pv.height);
+    $('#choice').hidden = false;
+    return new Promise((res) => { choiceResolve = res; });
+  }
+  function closeChoice(v) {
+    $('#choice').hidden = true;
+    const c = $('#choiceCanvas');
+    c.width = c.height = 0;
+    const r = choiceResolve;
+    choiceResolve = null;
+    if (r) r(v);
   }
   async function ensureAddress(snap) {
     if (!snap.pos || snap.address || !navigator.onLine) return;
@@ -361,42 +450,77 @@
       live.addr = { label, lat: snap.pos.lat, lon: snap.pos.lon, t: Date.now() };
     }
   }
+  async function capture(getCanvas) {
+    const snap = snapshot();
+    const canvas = await getCanvas();
+    const addrP = ensureAddress(snap).catch(() => {});
+    const mode = await chooseMode(canvas);
+    if (!mode) { Photo.release(canvas); return; }
+    await processCapture(canvas, snap, mode, addrP);
+  }
+  async function shoot() {
+    if (shooting) return;
+    if (!cur()) { go('dossier'); return; }
+    if (!Camera.active) {
+      if (camStarting) { toast('La caméra démarre…'); return; }
+      $('#fileCam').click();
+      return;
+    }
+    shooting = true;
+    $('#btnShutter').classList.add('busy');
+    flashFx();
+    try {
+      await capture(() => Camera.grab());
+    } catch (e) {
+      console.error(e);
+      toast('La photo n’a pas été enregistrée : ' + ((e && e.message) || e), 5000);
+    } finally {
+      shooting = false;
+      $('#btnShutter').classList.remove('busy');
+    }
+  }
   function uniqueName(name) {
     const used = new Set(photos.map((p) => p.name));
     let n = name, k = 2;
     while (used.has(n)) n = name.replace(/\.jpg$/i, `_${k++}.jpg`);
     return n;
   }
-  async function processCapture(canvas, snap) {
-    let comment = '';
-    if (S.annotate) {
+  async function processCapture(canvas, snap, mode, addrP) {
+    const d = cur();
+    if (addrP) await addrP;
+    let extra = { comment: '', zone: snap.address || '', metres: [] };
+    if (mode !== 'photo') {
       go('annot');
-      const r = await window.Annotator.edit(canvas);
+      const r = await window.Editor.open(canvas, { mode, zone: extra.zone, fournitures: d.fournitures });
       go('cam');
       if (!r) { Photo.release(canvas); toast('Photo abandonnée'); return; }
-      comment = r.comment || '';
+      extra = { comment: r.comment, zone: r.zone, metres: r.metres };
+      if (r.newFournitures.length) d.fournitures.push(...r.newFournitures);
     }
-    await ensureAddress(snap);
-    const rec = await Photo.build(canvas, snap, comment, S.quality);
+    const rec = await Photo.build(canvas, snap, extra, S.quality);
     Photo.release(canvas);
+    rec.dossierId = d.id;
+    rec.mode = mode;
     rec.name = uniqueName(rec.name);
     await DB.put(rec);
+    await saveDossier(d);
     photos.push(lite(rec));
     updateCounts();
-    const p = snap.pos;
-    if (!p) toast('Photo enregistrée sans position GPS', 3500);
-    else if (Date.now() - p.t > 120000) toast(`Photo enregistrée. Attention : position GPS vieille de ${Math.round((Date.now() - p.t) / 60000)} min`, 4500);
-    else if (p.acc > 30) toast(`Photo enregistrée, précision GPS faible (±${Math.round(p.acc)} m)`, 3500);
-    else toast('Photo enregistrée');
+    const p = snap.pos, n = (rec.metres || []).length;
+    const what = mode === 'metres' ? `Photo et ${plural(n, 'métré')} enregistrés` : 'Photo enregistrée';
+    if (!p) toast(what + ', sans position GPS', 3500);
+    else if (Date.now() - p.t > 120000) toast(`${what}. Attention : position GPS vieille de ${Math.round((Date.now() - p.t) / 60000)} min`, 4500);
+    else if (p.acc > 30) toast(`${what}, précision GPS faible (±${Math.round(p.acc)} m)`, 3500);
+    else toast(what);
   }
   function updateCounts() {
-    const n = photos.length, c = $('#galCount'), img = $('#lastThumb');
+    const P = photos.filter((p) => p.dossierId === S.dossierId);
+    const n = P.length, c = $('#galCount'), img = $('#lastThumb');
     c.hidden = !n;
     c.textContent = n > 99 ? '99+' : String(n);
-    const last = photos.reduce((a, p) => (!a || p.ts > a.ts ? p : a), null);
+    const last = P.reduce((a, p) => (!a || p.ts > a.ts ? p : a), null);
     if (last && last.thumb) img.src = thumbUrl(last); else img.removeAttribute('src');
   }
-  function renderAnnotBtn() { $('#btnAnnot').setAttribute('aria-pressed', S.annotate ? 'true' : 'false'); }
 
   // ------------------------------------------------------------------ mini-carte du viseur
   const meIcon = () => L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
@@ -434,7 +558,7 @@
       this.map.on('baselayerchange', (e) => { this.base = Math.max(0, BASES.findIndex((b) => b.name === e.name)); });
       this.map.on('popupopen', (e) => {
         const b = e.popup.getElement().querySelector('[data-open]');
-        if (b) b.onclick = () => openDetail(b.dataset.open);
+        if (b) b.onclick = () => openDetail(b.dataset.open, galleryOrder(), 'map');
       });
       this.group = L.layerGroup().addTo(this.map);
       this.map.setView([46.6, 2.4], 6);
@@ -452,8 +576,9 @@
         const n = nums.get(p.id), src = thumbUrl(p);
         const icon = L.divIcon({ className: '', html: `<div class="pm"><img src="${src}" alt=""><b>${n}</b></div>`, iconSize: [48, 48], iconAnchor: [24, 57], popupAnchor: [0, -54] });
         const m = L.marker([p.lat, p.lon], { icon, title: p.name }).addTo(this.group);
+        const mt = (p.metres || []).map((x) => `${esc(x.name)} : ${G.qty(x.qty)} ${esc(x.unit)}`).join('<br>');
         m.bindPopup(`<div class="pop"><img src="${src}" alt=""><p><b>${n}</b> ${G.dateFR(p.ts)} ${G.timeFR(p.ts).slice(0, 5)}</p>` +
-          (p.address ? `<p>${esc(p.address)}</p>` : '') +
+          (p.zone || p.address ? `<p>${esc(p.zone || p.address)}</p>` : '') + (mt ? `<p><b>${mt}</b></p>` : '') +
           `<button type="button" class="btn small" data-open="${p.id}">Ouvrir la fiche</button></div>`, { minWidth: 220, maxWidth: 240 });
         this.marks.set(p.id, m);
       });
@@ -527,8 +652,8 @@
       x.fillStyle = '#16181B'; x.font = '800 24px system-ui, -apple-system, Arial, sans-serif';
       x.fillText(String(nums.get(p.id)), pt.x, pt.y + 1);
     });
-    // cartouche
-    const title = (filter !== '__all' && filter) || S.chantier || 'Photos de chantier';
+    const d = filter !== '__all' ? dossierOf(filter) : cur();
+    const title = d ? d.chantier : 'Photos de chantier';
     x.textAlign = 'left';
     x.font = '700 30px system-ui, -apple-system, Arial, sans-serif';
     const tw = Math.min(W - 48, x.measureText(title).width + 48);
@@ -537,7 +662,6 @@
     x.fillStyle = '#16181B'; x.fillText(title, 40, 50, tw - 36);
     x.font = '500 22px system-ui, -apple-system, Arial, sans-serif';
     x.fillText(`${G.dateFR(Date.now())}, fond ${b.name}`, 40, 86, tw - 36);
-    // échelle
     const lat = m.getCenter().lat;
     const mpp = 40075016.686 * Math.cos(lat * Math.PI / 180) / (256 * Math.pow(2, m.getZoom())) / 2;
     let len = 1;
@@ -554,9 +678,9 @@
     const blob = await Photo.toBlob(c, 'image/jpeg', 0.9);
     Photo.release(c);
     $('#toast').classList.remove('on');
-    sheetMode = 'image';
+    sheetMode = 'direct';
     $('#sheetTitle').textContent = 'Image de la carte';
-    $('#sheetScope').textContent = `${BigMap.list().length} photo(s) numérotée(s)`;
+    $('#sheetScope').textContent = `${plural(BigMap.list().length, 'photo')} numérotée${BigMap.list().length > 1 ? 's' : ''}`;
     showReady({
       blob, name: `Carte_${Exports.slug(title) || 'photos'}_${G.stamp(Date.now()).slice(0, 8)}.jpg`,
       note: tiles ? '' : 'Le fond de carte n’a pas pu être récupéré (hors connexion ?). L’image contient seulement les numéros et l’échelle.'
@@ -565,34 +689,38 @@
   }
 
   // ------------------------------------------------------------------ photos
-  function visible() { return photos.filter((p) => filter === '__all' || (p.chantier || '') === filter); }
+  function visible() { return photos.filter((p) => filter === '__all' || p.dossierId === filter); }
   function galleryOrder() { return visible().slice().sort((a, b) => b.ts - a.ts); }
   function numbering() {
     const m = new Map();
     visible().slice().sort((a, b) => a.ts - b.ts).forEach((p, i) => m.set(p.id, i + 1));
     return m;
   }
+  const mtext = (p) => (p.metres || []).map((m) => `${m.name} ${G.qty(m.qty)} ${m.unit}`).join(', ');
   function renderGallery() {
-    const names = Array.from(new Set(photos.map((p) => p.chantier || ''))).sort((a, b) => a.localeCompare(b, 'fr'));
-    if (filter !== '__all' && !names.includes(filter)) filter = '__all';
+    if (filter !== '__all' && !dossierOf(filter)) filter = S.dossierId || '__all';
     const f = $('#galFilter');
-    f.innerHTML = `<option value="__all">Tous les chantiers (${photos.length})</option>` +
-      names.map((n) => `<option value="${esc(n)}">${n ? esc(n) : 'Sans chantier'} (${photos.filter((p) => (p.chantier || '') === n).length})</option>`).join('');
+    f.innerHTML = `<option value="__all">Tous les dossiers (${photos.length})</option>` +
+      byActivity().map((d) => `<option value="${d.id}">${esc(d.chantier)} (${stats(d).n})</option>`).join('');
     f.value = filter;
     const list = galleryOrder(), nums = numbering(), grid = $('#galGrid');
     $('#galTitle').textContent = list.length ? `Photos (${list.length})` : 'Photos';
     $('#galEmpty').hidden = list.length > 0;
     grid.classList.toggle('selecting', selecting);
-    grid.innerHTML = list.map((p) => `<button type="button" class="card${sel.has(p.id) ? ' sel' : ''}" data-id="${p.id}">` +
-      `<img class="ph" loading="lazy" src="${thumbUrl(p)}" alt="">` +
-      `<span class="num">${nums.get(p.id)}</span><span class="chk"><svg class="ic"><use href="#i-check"/></svg></span>` +
-      `<span class="meta"><span class="d">${G.dateFR(p.ts)} ${G.timeFR(p.ts).slice(0, 5)}</span>` +
-      `<span class="a">${esc(p.address || p.chantier || '')}</span>${G.ok(p.lat) ? '' : '<span class="tag">Sans GPS</span>'}</span></button>`).join('');
+    grid.innerHTML = list.map((p) => {
+      const mt = mtext(p);
+      return `<button type="button" class="card${sel.has(p.id) ? ' sel' : ''}" data-id="${p.id}">` +
+        `<img class="ph" loading="lazy" src="${thumbUrl(p)}" alt="">` +
+        `<span class="num">${nums.get(p.id)}</span><span class="chk"><svg class="ic"><use href="#i-check"/></svg></span>` +
+        `<span class="meta"><span class="d">${G.dateFR(p.ts)} ${G.timeFR(p.ts).slice(0, 5)}</span>` +
+        `<span class="a">${esc(p.zone || p.address || '')}</span>` + (mt ? `<span class="mt">${esc(mt)}</span>` : '') +
+        `${G.ok(p.lat) ? '' : '<span class="tag">Sans GPS</span>'}</span></button>`;
+    }).join('');
     renderSelBar();
   }
   function renderSelBar() {
     $('#selBar').hidden = !selecting;
-    $('#selCount').textContent = sel.size + (sel.size > 1 ? ' photos' : ' photo');
+    $('#selCount').textContent = plural(sel.size, 'photo');
     const b = $('#galSelect');
     b.setAttribute('aria-pressed', String(selecting));
     $('span', b).textContent = selecting ? 'Terminer' : 'Sélectionner';
@@ -603,12 +731,23 @@
     sel.delete(id);
     if (thumbUrls.has(id)) { URL.revokeObjectURL(thumbUrls.get(id)); thumbUrls.delete(id); }
   }
+  async function setZone(ids, zone) {
+    for (const id of ids) {
+      const full = await DB.get(id);
+      if (!full) continue;
+      full.zone = zone;
+      await DB.put(full);
+      const c = photos.find((x) => x.id === id);
+      if (c) c.zone = zone;
+    }
+  }
 
   // fiche
   let detList = [], detIdx = 0, detUrl = null, detBlob = null;
-  function openDetail(id) {
-    detList = galleryOrder();
+  function openDetail(id, list, from) {
+    detList = list && list.some((p) => p.id === id) ? list : galleryOrder();
     detIdx = Math.max(0, detList.findIndex((p) => p.id === id));
+    detailReturn = from || 'gallery';
     go('detail');
     renderDetail();
   }
@@ -618,12 +757,20 @@
   }
   async function renderDetail() {
     const p = detList[detIdx];
-    if (!p) { go('gallery'); return; }
+    if (!p) { go(detailReturn); return; }
     releaseDetail();
     $('#detTitle').textContent = `${detIdx + 1} sur ${detList.length}`;
     $('#detImg').src = thumbUrl(p);
     const main = S.crs, oth = G.other(main), has = G.ok(p.lat);
-    const rows = [['Fichier', esc(p.name)], ['Date', `${G.dateFR(p.ts)} à ${G.timeFR(p.ts)}`]];
+    const rows = [
+      ['Fichier', esc(p.name)],
+      ['Date', `${G.dateFR(p.ts)} à ${G.timeFR(p.ts)}`],
+      ['Type', TYPE[p.mode] || 'Photo seule'],
+      ['Zone', `${esc(p.zone || p.address || '—')} <button type="button" class="link" data-act="zone">Modifier</button>`]
+    ];
+    if (p.metres && p.metres.length) {
+      rows.push(['Métrés', p.metres.map((m) => `<span class="mline"><i style="--c:${m.color || '#888'}"></i>${esc(m.name)} : ${G.qty(m.qty)} ${esc(m.unit)}</span>`).join('')]);
+    }
     if (has) {
       const a = G.xy(p, main), b = G.xy(p, oth);
       rows.push([G.CRS[main].label, `X ${G.fmt(a.x, 2)}<br>Y ${G.fmt(a.y, 2)}`]);
@@ -633,8 +780,9 @@
       rows.push(['Précision', p.acc == null ? '—' : `±${G.fmt(p.acc, 1)} m`]);
     } else rows.push(['Position', 'Non disponible au moment de la photo']);
     rows.push(['Cap', G.ok(p.heading) ? `${Math.round(p.heading)}° ${G.cardinal(p.heading)}` : '—']);
-    if (p.address) rows.push(['Adresse', esc(p.address)]);
-    if (p.chantier) rows.push(['Chantier', esc(p.chantier)]);
+    if (p.address && p.address !== p.zone) rows.push(['Adresse', esc(p.address)]);
+    const d = dossierOf(p.dossierId);
+    if (d) rows.push(['Dossier', esc(d.chantier)]);
     if (p.operateur) rows.push(['Opérateur', esc(p.operateur)]);
     if (p.comment) rows.push(['Commentaire', esc(p.comment)]);
     rows.push(['Image', `${p.width} × ${p.height} px, ${fmtSize(p.size || 0)}`]);
@@ -650,15 +798,54 @@
       $('#detImg').src = detUrl;
     }
   }
-  function detailStep(d) {
-    const i = detIdx + d;
+  function detailStep(dd) {
+    const i = detIdx + dd;
     if (i < 0 || i >= detList.length) return;
     detIdx = i;
     renderDetail();
   }
 
+  // ------------------------------------------------------------------ récapitulatif des métrés
+  const dossierPhotos = (id) => photos.filter((p) => p.dossierId === id);
+  function renderRecap() {
+    if (!dossierOf(recapDossier)) recapDossier = S.dossierId || (dossiers[0] && dossiers[0].id) || null;
+    $('#recapDossier').innerHTML = byActivity().map((d) => `<option value="${d.id}">${esc(d.chantier)}</option>`).join('');
+    $('#recapDossier').value = recapDossier || '';
+    setSeg('#recapTab', recapTab);
+    const sum = Exports.metresSummary(Exports.prepare(dossierPhotos(recapDossier)));
+    const body = $('#recapBody');
+    $('#recapBar').hidden = !sum.rows.length;
+    if (!sum.rows.length) {
+      body.innerHTML = '<div class="empty"><p><strong>Aucun métré dans ce dossier.</strong></p>' +
+        '<p>Prenez une photo et choisissez « Métrés » : la fourniture et sa quantité s’ajoutent ici.</p></div>';
+      return;
+    }
+    if (recapTab === 'f') {
+      body.innerHTML = '<div class="rc-list">' + sum.byFourniture.map((f) =>
+        `<details class="rc-card" style="--c:${f.color}"><summary><span class="rc-name">${esc(f.name)}</span>` +
+        `<b class="rc-total">${G.qty(f.total)} ${esc(f.unit)}</b><small>${plural(f.n, 'relevé')}</small></summary>` +
+        '<div class="rc-rows">' + f.entries.map((e) =>
+          `<button type="button" class="rc-row" data-id="${e.id}"><span>${esc(e.zone)}</span><span>photo ${e.n}</span><b>${G.qty(e.qty)} ${esc(f.unit)}</b></button>`).join('') +
+        '</div></details>').join('') + '</div>';
+    } else {
+      body.innerHTML = '<div class="rc-list">' + sum.byZone.map((z) =>
+        `<section class="rz-card"><header><h3>${esc(z.zone)}</h3><button type="button" class="link" data-rename="${encodeURIComponent(z.zone)}">Renommer</button></header>` +
+        z.items.map((it) => `<div class="rz-row"><i style="--c:${it.color}"></i><span>${esc(it.name)}</span><b>${G.qty(it.total)} ${esc(it.unit)}</b></div>`).join('') +
+        `<p class="rz-photos">${z.photos.length > 1 ? 'Photos' : 'Photo'} ` +
+        z.photos.map((x) => `<button type="button" class="link" data-id="${x.id}">${x.n}</button>`).join(', ') + '</p></section>').join('') + '</div>';
+    }
+  }
+  async function renameZone(oldZ) {
+    const v = await prompt('Renommer la zone', oldZ, { placeholder: 'Nom de la zone' });
+    if (v == null || !v.trim() || v.trim() === oldZ) return;
+    const ids = dossierPhotos(recapDossier).filter((p) => (String(p.zone || p.address || '').trim() || 'Sans zone') === oldZ).map((p) => p.id);
+    await setZone(ids, v.trim());
+    renderRecap();
+    toast(`Zone renommée sur ${plural(ids.length, 'photo')}`);
+  }
+
   // ------------------------------------------------------------------ exports
-  let busyExport = false, ready = null, expCrs = S.crs, sheetMode = 'list';
+  let busyExport = false, ready = null, expCrs = S.crs, sheetMode = 'list', sheetList = [];
   function exportList() { return selecting && sel.size ? photos.filter((p) => sel.has(p.id)) : visible(); }
   function showSheetPart(part) {
     $('#expList').hidden = part !== 'list';
@@ -668,47 +855,66 @@
     $('#readyBack').hidden = sheetMode !== 'list';
   }
   function openSheet() {
-    const list = exportList();
-    if (!list.length) { toast('Aucune photo à exporter'); return; }
+    sheetList = exportList();
+    if (!sheetList.length) { toast('Aucune photo à exporter'); return; }
     sheetMode = 'list';
     expCrs = S.crs;
     setSeg('#sheetCrs', expCrs);
-    $('#sheetTitle').textContent = `Exporter ${list.length} photo${list.length > 1 ? 's' : ''}`;
-    $('#sheetScope').textContent = selecting && sel.size ? 'Photos sélectionnées' : (filter === '__all' ? 'Tous les chantiers' : (filter || 'Sans chantier'));
+    $('#sheetTitle').textContent = `Exporter ${plural(sheetList.length, 'photo')}`;
+    const d = filter !== '__all' ? dossierOf(filter) : null;
+    $('#sheetScope').textContent = selecting && sel.size ? 'Photos sélectionnées' : (d ? d.chantier : 'Tous les dossiers');
     showSheetPart('list');
     $('#sheet').hidden = false;
+  }
+  function exportDirect(kind, list, title) {
+    if (!list.length) { toast('Aucune photo dans ce dossier'); return; }
+    sheetMode = 'direct';
+    expCrs = S.crs;
+    $('#sheetTitle').textContent = title;
+    const d = dossierOf(list[0].dossierId);
+    $('#sheetScope').textContent = d ? d.chantier : '';
+    $('#sheet').hidden = false;
+    runExport(kind, list);
   }
   function closeSheet() { if (busyExport) return; $('#sheet').hidden = true; ready = null; }
   function progress(i, n, label) {
     $('#expBar').style.width = Math.round(100 * Math.min(1, n ? i / n : 0)) + '%';
     $('#expMsg').textContent = n > 1 ? `${label} : ${Math.min(i + 1, n)} sur ${n}` : label;
   }
-  async function runExport(kind) {
+  function ctxFor(list) {
+    const ids = new Set(list.map((p) => p.dossierId));
+    const d = ids.size === 1 ? dossierOf(Array.from(ids)[0]) : null;
+    return { crs: expCrs, chantier: d ? d.chantier : '', operateur: d ? (d.operateur || '') : '', title: d ? d.chantier : 'Photos de chantier', progress };
+  }
+  async function runExport(kind, list) {
     if (busyExport) return;
-    const ids = new Set(exportList().map((p) => p.id));
+    const ids = new Set(list.map((p) => p.id));
     busyExport = true;
     showSheetPart('busy');
     progress(0, 1, 'Lecture des photos');
     try {
       const all = (await DB.all()).filter((p) => ids.has(p.id));
-      const fch = filter !== '__all' ? filter : (all.length && all.every((p) => p.chantier === all[0].chantier) ? all[0].chantier : '');
-      const title = fch || S.chantier.trim() || 'Photos de chantier';
-      const res = await Exports.kinds[kind](all, { crs: expCrs, chantier: fch, title, progress });
+      const res = await Exports.kinds[kind](all, ctxFor(all));
+      const notes = [];
       if (res.skipped) {
         const s = res.skipped > 1;
-        res.note = ['qgis', 'all'].includes(kind)
+        notes.push(['qgis', 'all'].includes(kind)
           ? `${res.skipped} photo${s ? 's' : ''} sans position GPS : dans le dossier photos, mais pas sur la carte.`
-          : `${res.skipped} photo${s ? 's' : ''} sans position GPS ${s ? 'ne sont pas incluses' : 'n’est pas incluse'} dans ce fichier.`;
+          : `${res.skipped} photo${s ? 's' : ''} sans position GPS ${s ? 'ne sont pas incluses' : 'n’est pas incluse'} dans ce fichier.`);
       }
+      if (kind === 'xlsx' && res.empty) notes.push('Aucun métré dans ces photos : le classeur ne contient que les en-têtes.');
+      if (kind === 'html') notes.push('Ouvrez ce fichier dans un navigateur, puis « Exporter en PDF » pour obtenir le rapport.');
+      res.note = notes.join(' ');
       showReady(res);
     } catch (e) {
       console.error(e);
       toast('Export impossible : ' + ((e && e.message) || e), 5000);
-      showSheetPart('list');
+      if (sheetMode === 'list') showSheetPart('list'); else closeSheetForce();
     } finally {
       busyExport = false;
     }
   }
+  function closeSheetForce() { $('#sheet').hidden = true; ready = null; }
   function showReady(res) {
     ready = res;
     $('#readyName').textContent = res.name;
@@ -723,13 +929,13 @@
   function renderSettings() {
     setSeg('#setCrs', S.crs);
     setSeg('#setQuality', S.quality >= 0.9 ? '0.93' : '0.85');
-    $('#setChantier').value = S.chantier;
-    $('#setOperateur').value = S.operateur;
+    const d = cur();
+    $('#setDossier').textContent = d ? [d.chantier, d.operateur].filter(Boolean).join(', ') : 'Aucun dossier ouvert';
     storageInfo();
   }
   async function storageInfo() {
     const n = photos.length, bytes = photos.reduce((s, p) => s + (p.size || 0), 0);
-    let txt = `${n} photo${n > 1 ? 's' : ''} enregistrée${n > 1 ? 's' : ''}, ${fmtSize(bytes)}`;
+    let txt = `${plural(n, 'photo')} sur ce téléphone, ${fmtSize(bytes)}`;
     try {
       if (navigator.storage && navigator.storage.estimate) {
         const e = await navigator.storage.estimate();
@@ -738,23 +944,50 @@
     } catch (e) { /* estimation indisponible */ }
     $('#setStorage').textContent = txt + '.';
   }
+  async function editDossier() {
+    const d = cur();
+    if (!d) { go('dossier'); return; }
+    const r = await form({
+      title: 'Modifier le dossier', ok: 'Enregistrer',
+      html: `<label class="field">Nom du chantier<input name="ch" type="text" autocomplete="off" value="${esc(d.chantier)}"></label>` +
+        `<label class="field">Opérateur<input name="op" type="text" autocomplete="name" value="${esc(d.operateur || '')}"></label><p class="err" hidden></p>`,
+      validate: (b) => {
+        const ch = b.querySelector('[name=ch]').value.trim();
+        if (!ch) { const e = b.querySelector('.err'); e.textContent = 'Indiquez le nom du chantier.'; e.hidden = false; return false; }
+        return { ch, op: b.querySelector('[name=op]').value.trim() };
+      }
+    });
+    if (!r) return;
+    d.chantier = r.ch; d.operateur = r.op;
+    if (r.op) { S.operateur = r.op; save(); }
+    await saveDossier(d);
+    renderSettings(); renderDossierChip();
+    toast('Dossier modifié. Les photos déjà prises gardent l’ancien bandeau.', 3500);
+  }
 
   // ------------------------------------------------------------------ événements
   function bind() {
     document.addEventListener('click', (e) => {
       const el = e.target.closest('[data-go]');
-      if (!el) return;
-      let t = el.dataset.go;
-      if (screen === 'map' && t === 'gallery') t = mapReturn;
-      go(t);
+      if (el) go(el.dataset.go);
     });
+    // dossiers
+    $('#dosCreate').onclick = () => { askCompass(); createDossier().catch((e) => toast('Création impossible : ' + e.message, 4000)); };
+    $('#dosResumeBtn').onclick = () => { askCompass(); const d = cur(); if (d) useDossier(d); };
+    $('#dosOthers').addEventListener('click', (e) => {
+      const b = e.target.closest('.dos-row');
+      if (!b) return;
+      askCompass();
+      const d = dossierOf(b.dataset.id);
+      if (d) useDossier(d);
+    });
+    ['#dosChantier', '#dosOperateur'].forEach((s) => $(s).addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#dosCreate').click(); }));
+    // viseur
+    $('#hDossier').onclick = () => go('dossier');
     $('#btnSettings').onclick = () => go('settings');
-    $('#btnGallery').onclick = () => go('gallery');
+    $('#btnGallery').onclick = () => { filter = S.dossierId || filter; go('gallery'); };
     $('#btnShutter').onclick = shoot;
-    $('#btnAnnot').onclick = () => {
-      S.annotate = !S.annotate; save(); renderAnnotBtn();
-      toast(S.annotate ? 'Annotation activée : chaque photo s’ouvre pour être annotée' : 'Annotation désactivée');
-    };
+    $('#btnRecap').onclick = () => openRecap('cam');
     $('#hCapBtn').onclick = async () => {
       if (G.Compass.needsPermission && !G.Compass.started) {
         if (await G.Compass.request()) startCompass();
@@ -767,19 +1000,22 @@
     $('#fileCam').onchange = async (e) => {
       const file = e.target.files && e.target.files[0];
       e.target.value = '';
-      if (!file || shooting) return;
+      if (!file || shooting || !cur()) return;
       shooting = true;
-      try {
-        const snap = snapshot();
-        await processCapture(await Camera.fromFile(file), snap);
-      } catch (err) {
-        toast('Image illisible : ' + err.message, 4000);
-      } finally { shooting = false; }
+      try { await capture(() => Camera.fromFile(file)); }
+      catch (err) { toast('Image illisible : ' + err.message, 4000); }
+      finally { shooting = false; }
     };
+    $('#choice').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-mode]');
+      if (b) closeChoice(b.dataset.mode);
+    });
+    $('#choiceRetake').onclick = () => closeChoice(null);
     $('#minimap').addEventListener('click', () => openMap('cam'));
     $('#minimap').addEventListener('keydown', (e) => { if (e.key === 'Enter') openMap('cam'); });
-
+    // photos
     $('#galMap').onclick = () => openMap('gallery');
+    $('#galRecap').onclick = () => openRecap('gallery');
     $('#galExport').onclick = openSheet;
     $('#galFilter').onchange = (e) => { filter = e.target.value; sel.clear(); renderGallery(); };
     $('#galSelect').onclick = () => { selecting = !selecting; if (!selecting) sel.clear(); renderGallery(); };
@@ -791,7 +1027,7 @@
         if (sel.has(id)) sel.delete(id); else sel.add(id);
         c.classList.toggle('sel', sel.has(id));
         renderSelBar();
-      } else openDetail(id);
+      } else openDetail(id, galleryOrder(), 'gallery');
     });
     $('#selAll').onclick = () => {
       const v = visible();
@@ -801,24 +1037,35 @@
     $('#selDelete').onclick = async () => {
       if (!sel.size) return;
       const n = sel.size;
-      if (!(await confirmBox('Supprimer les photos', `${n} photo${n > 1 ? 's' : ''} ${n > 1 ? 'seront effacées' : 'sera effacée'} de ce téléphone. Exportez-les avant si besoin.`, 'Supprimer', true))) return;
+      if (!(await confirmBox('Supprimer les photos', `${plural(n, 'photo')} ${n > 1 ? 'seront effacées' : 'sera effacée'} de ce téléphone, avec leurs métrés. Exportez-les avant si besoin.`, 'Supprimer', true))) return;
       for (const id of Array.from(sel)) await removePhoto(id);
       renderGallery(); updateCounts(); toast('Photos supprimées');
     };
     $('#selExport').onclick = openSheet;
-
+    // fiche
+    $('#detBack').onclick = () => go(detailReturn);
     $('#detShare').onclick = () => { const p = detList[detIdx]; if (p && detBlob) shareFile(detBlob, p.name); };
     $('#detDelete').onclick = async () => {
       const p = detList[detIdx];
-      if (!p || !(await confirmBox('Supprimer la photo', `${p.name} sera effacée de ce téléphone.`, 'Supprimer', true))) return;
+      if (!p || !(await confirmBox('Supprimer la photo', `${p.name} sera effacée de ce téléphone, avec ses métrés.`, 'Supprimer', true))) return;
       await removePhoto(p.id);
       detList.splice(detIdx, 1);
       updateCounts();
       toast('Photo supprimée');
-      if (!detList.length) { go('gallery'); return; }
+      if (!detList.length) { go(detailReturn); return; }
       detIdx = Math.min(detIdx, detList.length - 1);
       renderDetail();
     };
+    $('#detFacts').addEventListener('click', async (e) => {
+      if (!e.target.closest('[data-act="zone"]')) return;
+      const p = detList[detIdx];
+      if (!p) return;
+      const v = await prompt('Zone de la photo', p.zone || p.address || '', { placeholder: 'Adresse ou nom de zone' });
+      if (v == null) return;
+      await setZone([p.id], v.trim());
+      renderDetail();
+      toast('Zone modifiée');
+    });
     $('#detOnMap').onclick = () => { const p = detList[detIdx]; if (p) openMap('detail', p.id); };
     let sx = null;
     $('#detImgBox').addEventListener('touchstart', (e) => { sx = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
@@ -828,19 +1075,32 @@
       sx = null;
       if (Math.abs(dx) > 60) detailStep(dx < 0 ? 1 : -1);
     });
-
+    // carte
+    $('#mapBack').onclick = () => go(mapReturn);
     $('#mapMe').onclick = () => BigMap.locate();
     $('#mapFit').onclick = () => BigMap.fit();
     $('#mapShot').onclick = () => mapImage().catch((e) => toast('Image impossible : ' + e.message, 4000));
-
+    // récap
+    $('#recapBack').onclick = () => go(recapReturn);
+    $('#recapDossier').onchange = (e) => { recapDossier = e.target.value; renderRecap(); };
+    $('#recapTab').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; recapTab = b.dataset.v; renderRecap(); };
+    $('#recapBody').addEventListener('click', (e) => {
+      const r = e.target.closest('[data-rename]');
+      if (r) { renameZone(decodeURIComponent(r.dataset.rename)); return; }
+      const b = e.target.closest('[data-id]');
+      if (b) openDetail(b.dataset.id, dossierPhotos(recapDossier).sort((x, y) => y.ts - x.ts), 'recap');
+    });
+    $('#recapXlsx').onclick = () => exportDirect('xlsx', dossierPhotos(recapDossier), 'Métrés Excel');
+    $('#recapPdf').onclick = () => exportDirect('html', dossierPhotos(recapDossier), 'Rapport avec carte et métrés');
+    // réglages
     $('#setCrs').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; S.crs = b.dataset.v; save(); setSeg('#setCrs', S.crs); renderHud(); };
     $('#setQuality').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; S.quality = parseFloat(b.dataset.v); save(); setSeg('#setQuality', b.dataset.v); };
-    $('#setChantier').oninput = (e) => { S.chantier = e.target.value; save(); };
-    $('#setOperateur').oninput = (e) => { S.operateur = e.target.value; save(); };
+    $('#setDosEdit').onclick = editDossier;
+    $('#setDosChange').onclick = () => go('dossier');
     $('#setHelp').onclick = locHelp;
     $('#setWipe').onclick = async () => {
       if (!photos.length) { toast('Aucune photo à supprimer'); return; }
-      if (!(await confirmBox('Supprimer toutes les photos', `Les ${photos.length} photos seront effacées de ce téléphone. Exportez-les avant si besoin.`, 'Tout supprimer', true))) return;
+      if (!(await confirmBox('Supprimer toutes les photos', `Les ${photos.length} photos de tous les dossiers seront effacées de ce téléphone. Exportez-les avant si besoin.`, 'Tout supprimer', true))) return;
       await DB.clear();
       thumbUrls.forEach((u) => URL.revokeObjectURL(u));
       thumbUrls.clear();
@@ -848,19 +1108,24 @@
       updateCounts(); storageInfo();
       toast('Photos supprimées');
     };
-
+    // feuille d'export
     $('#sheetClose').onclick = closeSheet;
     $('#sheet').addEventListener('click', (e) => { if (e.target.id === 'sheet') closeSheet(); });
     $('#sheetCrs').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; expCrs = b.dataset.v; setSeg('#sheetCrs', expCrs); };
-    $('#expList').addEventListener('click', (e) => { const b = e.target.closest('.exp'); if (b) runExport(b.dataset.k); });
+    $('#expList').addEventListener('click', (e) => { const b = e.target.closest('.exp'); if (b) runExport(b.dataset.k, sheetList); });
     $('#readyShare').onclick = () => { if (ready) shareFile(ready.blob, ready.name); };
     $('#readySave').onclick = () => { if (ready) download(ready.blob, ready.name); };
     $('#readyBack').onclick = () => showSheetPart('list');
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { if (!$('#sheet').hidden) closeSheet(); return; }
+      if (e.key === 'Escape') {
+        if (modalClose) modalClose();
+        else if (!$('#choice').hidden) closeChoice(null);
+        else if (!$('#sheet').hidden) closeSheet();
+        return;
+      }
       const typing = /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '');
-      if (!typing && screen === 'cam' && (e.key === ' ' || e.key === 'Enter') && e.target === document.body) { e.preventDefault(); shoot(); }
+      if (!typing && !modalClose && screen === 'cam' && $('#choice').hidden && (e.key === ' ' || e.key === 'Enter') && e.target === document.body) { e.preventDefault(); shoot(); }
       if (!typing && screen === 'detail' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) detailStep(e.key === 'ArrowRight' ? 1 : -1);
     });
     window.addEventListener('resize', () => { if (screen === 'cam') { layoutCam(); Mini.refresh(); } });
@@ -872,22 +1137,46 @@
     window.addEventListener('offline', renderHud);
   }
 
-  // ------------------------------------------------------------------ démarrage
+  // ------------------------------------------------------------------ données et démarrage
+  async function loadData() {
+    dossiers = await DB.allDossiers();
+    const full = await DB.all();
+    const orphans = full.filter((p) => !p.dossierId);
+    if (orphans.length) {
+      // photos de la version 1.0 : un dossier par nom de chantier
+      for (const p of orphans) {
+        const name = p.chantier || 'Photos sans dossier';
+        let d = dossiers.find((x) => x.migrated && x.chantier === name);
+        if (!d) { d = newDossier(name, p.operateur || ''); d.created = p.ts; d.migrated = true; dossiers.push(d); }
+        p.dossierId = d.id;
+        p.mode = p.mode || (p.comment ? 'annotation' : 'photo');
+        p.zone = p.zone || p.address || '';
+        p.metres = p.metres || [];
+        await DB.put(p);
+      }
+      for (const d of dossiers.filter((x) => x.migrated)) await DB.putDossier(d);
+    }
+    photos = full.map(lite);
+    if (S.dossierId && !cur()) S.dossierId = null;
+    if (!S.dossierId && dossiers.length) S.dossierId = byActivity()[0].id;
+    filter = S.dossierId || '__all';
+    save();
+  }
   async function init() {
     Camera.init($('#video'));
-    window.Annotator.init();
+    window.Editor.init();
     Mini.init();
     bind();
     bindPinch();
-    renderAnnotBtn();
     renderHud();
     renderCap(null);
     if (!G.Compass.needsPermission) startCompass();
     startGeo();
-    try { photos = (await DB.all()).map(lite); }
-    catch (e) { toast('Stockage local indisponible : les photos ne pourront pas être enregistrées.', 6000); }
+    try { await loadData(); }
+    catch (e) { console.error(e); toast('Stockage local indisponible : les photos ne pourront pas être enregistrées.', 6000); }
+    renderDossierChip();
     updateCounts();
-    startCamera();
+    renderDossierScreen();
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
       navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -895,6 +1184,6 @@
   }
 
   // accès en lecture pour le diagnostic
-  window.__geocliche = { state: () => ({ screen, photos, ready, live, settings: S }) };
+  window.__geocliche = { state: () => ({ screen, photos, dossiers, ready, live, settings: S }) };
   init();
 })();

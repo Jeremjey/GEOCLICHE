@@ -1,7 +1,7 @@
 /* GéoCliché — caméra : flux arrière, choix d'objectif, zoom, capture d'image */
 (function (global) {
   'use strict';
-  const MAX_AREA = 12.5e6; // limite prudente des canvas iOS
+  const MAX_AREA = 12.3e6; // limite prudente des canvas iOS
 
   const Camera = {
     video: null, stream: null, track: null, deviceId: null, active: false,

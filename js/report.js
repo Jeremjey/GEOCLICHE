@@ -79,6 +79,19 @@ legend{font-size:14px;font-weight:600;margin-bottom:6px;padding:0}
 .pn{display:flex;align-items:center;gap:2mm;font-weight:600}
 .pn .badge{min-width:5.5mm;height:5.5mm;font-size:7.5pt;border-radius:3mm}
 .pcm{font-style:italic}
+.recap{grid-column:1/-1;background:#fff;border-radius:12px;border:1px solid #D9DCDF;padding:12px 14px}
+.recap h2{margin:0 0 8px;font-size:16px}
+.rt{width:100%;border-collapse:collapse;font-size:13px}
+.rt th{text-align:left;font-weight:700;border-bottom:2px solid var(--j);padding:5px 6px}
+.rt td{border-bottom:1px solid #E3E6E4;padding:5px 6px;vertical-align:top}
+.rt td.q{text-align:right;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}
+.dot{display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c);margin-right:6px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.cm{margin:3px 0 0;font-weight:600}
+.page.flow{overflow:visible;display:block}
+.page.flow h2{font-size:13pt;margin:0 0 3mm}
+.page.flow h3{font-size:11pt;margin:6mm 0 2mm}
+.page.flow .rt{font-size:9pt}
+@media print{.rt tr{break-inside:avoid}}
 @media print{
   html,body{height:auto;background:#fff}
   body.previewing>:not(#pv){display:none!important}
@@ -109,7 +122,7 @@ legend{font-size:14px;font-weight:600;margin-bottom:6px;padding:0}
       <label class="seg"><input type="radio" name="ori" value="portrait" checked><span>Portrait</span></label>
       <label class="seg"><input type="radio" name="ori" value="paysage"><span>Paysage</span></label>
     </fieldset>
-    <p class="hint">Page 1 : la carte avec les numéros des photos. Pages suivantes : 6 photos par page avec leurs coordonnées.</p>
+    <p class="hint">Page 1 : la carte avec les numéros des photos. Ensuite le récapitulatif des métrés s’il y en a, puis 6 photos par page avec leurs coordonnées.</p>
     <div class="row"><button id="pCancel" class="btn ghost" type="button">Annuler</button><button id="pGo" class="btn" type="button">Préparer</button></div>
   </div>
 </div>
@@ -172,6 +185,27 @@ legend{font-size:14px;font-weight:600;margin-bottom:6px;padding:0}
       return parts.join(', ') + '. Coordonnées ' + D.crsName + '.';
     }
 
+    function mlines(p) {
+      var out = '';
+      if (p.zone) out += '<p class="cm">Zone : ' + esc(p.zone) + '</p>';
+      (p.metres || []).forEach(function (m) { out += '<p class="cm"><span class="dot" style="--c:' + m.color + '"></span>' + esc(m.name) + ' : ' + esc(m.qty) + ' ' + esc(m.unit) + '</p>'; });
+      return out;
+    }
+    function recapTables() {
+      var M = D.metres;
+      var a = '<table class="rt"><thead><tr><th>Fourniture</th><th>Total</th><th>Relevés</th><th>Photos</th></tr></thead><tbody>' +
+        M.byFourniture.map(function (f) { return '<tr><td><span class="dot" style="--c:' + f.color + '"></span>' + esc(f.name) + '</td><td class="q">' + esc(f.total) + ' ' + esc(f.unit) + '</td><td>' + f.n + '</td><td>' + esc(f.photos) + '</td></tr>'; }).join('') + '</tbody></table>';
+      var b = '<table class="rt"><thead><tr><th>Zone</th><th>Fourniture</th><th>Quantité</th><th>Photos</th></tr></thead><tbody>' +
+        M.byZone.map(function (z) { return z.items.map(function (it, i) { return '<tr><td>' + (i ? '' : '<b>' + esc(z.zone) + '</b>') + '</td><td><span class="dot" style="--c:' + it.color + '"></span>' + esc(it.name) + '</td><td class="q">' + esc(it.total) + ' ' + esc(it.unit) + '</td><td>' + (i ? '' : esc(z.photos)) + '</td></tr>'; }).join(''); }).join('') + '</tbody></table>';
+      return { a: a, b: b };
+    }
+    function hasMetres() { return !!(D.metres && D.metres.byFourniture && D.metres.byFourniture.length); }
+    function recapHtml() {
+      if (!hasMetres()) return '';
+      var t = recapTables();
+      return '<section class="recap"><h2>Métrés par fourniture</h2>' + t.a + '<h2 style="margin-top:14px">Détail par zone</h2>' + t.b + '</section>';
+    }
+
     $('#tTitle').textContent = D.title;
     $('#tMeta').textContent = metaText();
     document.title = D.title;
@@ -188,20 +222,20 @@ legend{font-size:14px;font-weight:600;margin-bottom:6px;padding:0}
     D.photos.forEach(function (p) {
       var html = '<figure class="pp"><img src="' + p.src + '" alt="Photo ' + p.n + '"><figcaption><span class="badge">' + p.n + '</span> ' +
         esc(p.date) + ' ' + esc(p.time) + '<br>' + esc(D.crs) + ' X ' + esc(p.xf) + ' Y ' + esc(p.yf) +
-        (p.address ? '<br>' + esc(p.address) : '') + (p.comment ? '<br><i>' + esc(p.comment) + '</i>' : '') + '</figcaption></figure>';
+        (p.address ? '<br>' + esc(p.address) : '') + mlines(p) + (p.comment ? '<br><i>' + esc(p.comment) + '</i>' : '') + '</figcaption></figure>';
       marks[p.n] = L.marker([p.lat, p.lon], { icon: icon(p.n), title: p.name }).addTo(map).bindPopup(html, { maxWidth: 320, minWidth: 240 });
     });
     fit(map, 40);
 
     // ---------- liste ----------
     var list = $('#list');
-    list.innerHTML = D.photos.length ? D.photos.map(function (p) {
+    list.innerHTML = recapHtml() + (D.photos.length ? D.photos.map(function (p) {
       return '<article class="card" tabindex="0" data-n="' + p.n + '"><img loading="lazy" src="' + p.src + '" alt="Photo ' + p.n + '">' +
         '<div class="ci"><p class="cn"><span class="badge">' + p.n + '</span><span>' + esc(p.date) + ' ' + esc(p.time) + '</span></p>' +
         '<p class="cx">' + esc(D.crs) + ' X ' + esc(p.xf) + ' Y ' + esc(p.yf) + '</p>' +
         (p.address ? '<p class="ca">' + esc(p.address) + '</p>' : '') +
-        (p.comment ? '<p class="cc">' + esc(p.comment) + '</p>' : '') + '</div></article>';
-    }).join('') : '<p class="empty">Aucune photo géolocalisée dans cet export.</p>';
+        mlines(p) + (p.comment ? '<p class="cc">' + esc(p.comment) + '</p>' : '') + '</div></article>';
+    }).join('') : '<p class="empty">Aucune photo géolocalisée dans cet export.</p>');
     function openCard(el) {
       var m = marks[el.getAttribute('data-n')];
       if (!m) return;
@@ -221,7 +255,7 @@ legend{font-size:14px;font-weight:600;margin-bottom:6px;padding:0}
         '<p>' + esc(D.crs) + ' X ' + esc(p.xf) + ' Y ' + esc(p.yf) + '</p>' +
         (p.address ? '<p>' + esc(p.address) + '</p>' : '') +
         (metrics(p) ? '<p>' + esc(metrics(p)) + '</p>' : '') +
-        (p.comment ? '<p class="pcm">' + esc(p.comment) + '</p>' : '') + '</figcaption></figure>';
+        mlines(p) + (p.comment ? '<p class="pcm">' + esc(p.comment) + '</p>' : '') + '</figcaption></figure>';
     }
     function closePreview() {
       $('#pv').hidden = true;
@@ -235,7 +269,7 @@ legend{font-size:14px;font-weight:600;margin-bottom:6px;padding:0}
       if (land) dims.reverse();
       var M = 10, W = dims[0] - 2 * M, H = dims[1] - 2 * M - 1;
       $('#pageStyle').textContent = '@page{size:' + fmt + ' ' + (land ? 'landscape' : 'portrait') + ';margin:' + M + 'mm}' +
-        '.page{width:' + W + 'mm;height:' + H + 'mm}' +
+        '.page{width:' + W + 'mm}.page:not(.flow){height:' + H + 'mm}.page.flow{min-height:' + H + 'mm}' +
         '.grid{grid-template-columns:repeat(' + (land ? 3 : 2) + ',minmax(0,1fr));grid-template-rows:repeat(' + (land ? 2 : 3) + ',minmax(0,1fr))}';
       var title = $('#pTitle').value.trim() || D.title;
       var root = $('#print');
@@ -244,14 +278,20 @@ legend{font-size:14px;font-weight:600;margin-bottom:6px;padding:0}
       var p1 = document.createElement('section');
       p1.className = 'page';
       p1.innerHTML = '<header class="ph"><h1>' + esc(title) + '</h1><p>' + esc(metaText()) + '</p></header><div id="pmap"></div>' +
-        '<footer class="pf"><span>Positions issues du GPS du téléphone, précision indicative.</span><span>Édité le ' + esc(D.generated) + ', page 1 / ' + total + '</span></footer>';
+        '<footer class="pf"><span>Positions issues du GPS du téléphone, précision indicative.</span><span>Édité le ' + esc(D.generated) + '</span></footer>';
       root.appendChild(p1);
+      if (hasMetres()) {
+        var t = recapTables(), pr = document.createElement('section');
+        pr.className = 'page flow';
+        pr.innerHTML = '<header class="ph small"><h2>' + esc(title) + '</h2><p>Récapitulatif des métrés</p></header><h2>Par fourniture</h2>' + t.a + '<h3>Détail par zone</h3>' + t.b;
+        root.appendChild(pr);
+      }
       for (var i = 0; i < pages; i++) {
         var chunk = D.photos.slice(i * per, i * per + per), pg = document.createElement('section');
         pg.className = 'page';
         pg.innerHTML = '<header class="ph small"><h2>' + esc(title) + '</h2><p>Photos ' + chunk[0].n + ' à ' + chunk[chunk.length - 1].n + '</p></header>' +
           '<div class="grid">' + chunk.map(card).join('') + '</div>' +
-          '<footer class="pf"><span>' + esc(D.crsName) + '</span><span>Page ' + (i + 2) + ' / ' + total + '</span></footer>';
+          '<footer class="pf"><span>' + esc(D.crsName) + '</span><span>Édité le ' + esc(D.generated) + '</span></footer>';
         root.appendChild(pg);
       }
       $('#pv').hidden = false;
@@ -268,7 +308,7 @@ legend{font-size:14px;font-weight:600;margin-bottom:6px;padding:0}
         if (done) return;
         done = true;
         $('#pvPrint').disabled = false;
-        $('#pvMsg').textContent = 'Aperçu prêt : ' + total + (total > 1 ? ' pages.' : ' page.');
+        $('#pvMsg').textContent = 'Aperçu prêt.';
       }
       tl.on('load', function () { setTimeout(ready, 300); });
       setTimeout(ready, 12000);
